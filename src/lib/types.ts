@@ -1,4 +1,6 @@
 export type RecordMode = "on_demand" | "continuous";
+export type Speaker = "me" | "other" | "unknown";
+export type UtteranceKind = "speech" | "decision" | "risk" | "blocker";
 
 export type Utterance = {
   id: string;
@@ -8,6 +10,17 @@ export type Utterance = {
   confidence: number;
   autoAssigned: boolean;
   confirmed: boolean;
+  meetingId: string | null;
+  speaker: Speaker;
+  kind: UtteranceKind;
+};
+
+export type Meeting = {
+  id: string;
+  title: string;
+  startedAt: string;
+  endedAt: string | null;
+  protocolId: string | null;
 };
 
 export type Task = {
@@ -32,6 +45,7 @@ export type Protocol = {
   createdAt: string;
   body: string;
   taskIds: string[];
+  meetingId: string | null;
 };
 
 export type ClarifyCandidate = {
@@ -57,23 +71,30 @@ export type Settings = {
   threshold: number;
   notify: boolean;
   inputDeviceId: string | "";
-  engine: "browser" | "grok";
+  engine: "browser" | "whisper" | "auto" | "grok";
   wizardDone: boolean;
   pauseSec: number;
   compactMode: boolean;
+  autoDocs: boolean;
+  templateId: string;
+  simdMode: "auto" | "off" | "fixed" | "relaxed";
+  computeDevice: "auto" | "webgpu" | "wasm";
 };
 
-export type MapLink = {
-  a: string;
-  b: string;
-  label: string;
-};
+export type ProtocolTemplate = { id: string; name: string; title: string; body: string };
+export type InstructionStep = { id: string; text: string; href: string; image: string | null };
+export type Instruction = { id: string; title: string; taskId: string | null; createdAt: string; steps: InstructionStep[] };
+export type MapLink = { a: string; b: string; label: string };
 
 export type AppState = {
   settings: Settings;
   tasks: Task[];
   utterances: Utterance[];
   protocols: Protocol[];
+  instructions: Instruction[];
+  templates: ProtocolTemplate[];
+  meetings: Meeting[];
+  activeMeetingId: string | null;
   mapLinks: MapLink[];
   hiddenPairs: string[];
 };
