@@ -1,29 +1,26 @@
 # Стенограф
 
-## Почему `npm install` упал из `C:\\Users\\Hiro`
+Локальный диктофон: речь → задачи → протокол → карта → напоминания.
+TypeScript. Whisper tiny и WebGPU под профиль ПК.
 
-Npm ищет `package.json` **в текущей папке**.  
-`C:\\Users\\Hiro` — это домашняя папка Windows, не проект.
+Репозиторий хранит исходники модулей (`src/lib`).
+Полная студия с микрофоном — вкладка превью справа в чате Grok.
 
-```bat
-cd %USERPROFILE%
-git clone https://github.com/hiromoto27/Stenograph.git
-cd Stenograph
-npm install
-```
+## Веб одной командой
 
-Или сначала скачайте ZIP с GitHub → распакуйте → в проводнике откройте эту папку → в адресной строке наберите `cmd` → Enter → `npm install`.
+**Без установки:** превью Grok в этом чате.
 
-Проверка, что вы в проекте:
+**У себя на ПК:** скачайте ZIP (Code → Download ZIP), распакуйте, в папке проекта запустите `start.bat`.
+
+Или:
 
 ```bat
-cd
-dir package.json
+cd /d C:\Users\Hiro\Stenograph
+npm start
 ```
 
-Должно показать файл `package.json`. Путь вроде `C:\\Users\\Hiro\\Stenograph`.
+Откроется http://127.0.0.1:4173
 
-## Где живое приложение
+`npm` только из этой папки, не из `C:\Users\Hiro`.
 
-Полный интерфейс сейчас работает в **превью Grok** (вкладка справа в этом чате).  
-Репозиторий хранит исходники модулей (`src/lib`, карта, Whisper), а не готовый сборщик всего Vite-приложения.
+Если git clone ломается на SSL — берите ZIP. В Username не пишите `cd Stenograph`.
