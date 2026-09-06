@@ -4,6 +4,6 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
-    "dev": "echo Откройте README.md — полный UI сейчас в превью Grok. Этот репо — исходники модулей."
+    "typecheck": "tsc --noEmit"
   }
 }
