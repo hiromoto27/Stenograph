@@ -1,16 +1,10 @@
-export type ComputeDevice = "auto" | "webgpu" | "wasm";
-
-export async function hasWebGPU() {
-  if (typeof navigator === "undefined" || !("gpu" in navigator)) return false;
-  try {
-    return Boolean(await (navigator as Navigator & { gpu?: { requestAdapter: () => Promise<unknown> } }).gpu?.requestAdapter());
-  } catch {
-    return false;
+export async function inspectGpu() {
+  if (typeof navigator === "undefined" || !("gpu" in navigator)) {
+    return { available: false, label: "", fp16: false, vendor: "" };
   }
-}
-
-export async function planMatmul(want: ComputeDevice = "auto") {
-  const webgpu = await hasWebGPU();
-  if (want === "wasm" || !webgpu) return { want, device: "wasm" as const, dtype: "q8" as const, webgpu };
-  return { want, device: "webgpu" as const, dtype: "fp16" as const, webgpu };
+  const adapter = await (navigator as Navigator & { gpu?: { requestAdapter: (o?: { powerPreference?: string }) => Promise<{ features?: { has: (n: string) => boolean }; info?: { vendor?: string; description?: string } }> } }).gpu?.requestAdapter({ powerPreference: "high-performance" });
+  if (!adapter) return { available: false, label: "", fp16: false, vendor: "" };
+  const fp16 = Boolean(adapter.features?.has("shader-f16"));
+  const label = adapter.info?.description || adapter.info?.vendor || "WebGPU";
+  return { available: true, label, fp16, vendor: adapter.info?.vendor || "" };
 }
