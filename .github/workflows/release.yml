@@ -9,33 +9,12 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-python@v5
         with:
-          node-version: 20
-      - uses: dtolnay/rust-toolchain@stable
-      - run: npm install
-      - uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          projectPath: .
-          releaseDraft: true
-  android:
-    name: Android apk
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: 17
-      - run: npm install
-      - run: npx cap sync android || echo "add android platform"
+          python-version: "3.11"
+      - run: pip install -r requirements-worker.txt -r requirements-ui.txt
+      - run: flet build windows --product "Стенограф" --org stenograph --description "Локальный диктофон: речь -> задачи -> протокол"
       - uses: actions/upload-artifact@v4
-        if: hashFiles('android/app/build/outputs/apk/debug/*.apk') != ''
         with:
-          name: stenograph-debug-apk
-          path: android/app/build/outputs/apk/debug/*.apk
+          name: stenograph-windows
+          path: build/windows/**

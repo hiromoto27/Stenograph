@@ -3,7 +3,7 @@
 Локальный диктофон для рабочих разговоров на русском.
 Слушает микрофон, распознаёт речь, раскладывает фразы по задачам, учится на уточнениях, собирает протокол, показывает связи задач и напоминает о сроках.
 
-Рабочие названия: **Стенограф** (превью Grok), **NeuralDictaphone** (Flet, Windows exe).
+Рабочее название: **Стенограф** (Flet, Windows exe).
 Целевая машина: ASUS Zenbook 14 UX3405C, 16 ГБ, Intel Arc. Язык — русский. После установки моделей интернет не обязателен.
 
 ## Зачем
@@ -12,18 +12,11 @@
 
 Постоянная запись третьих лиц без согласия недопустима: continuous только с подтверждением и красной точкой.
 
-## Две реализации
+## Реализация
 
-| | Превью Grok | NeuralDictaphone (Flet) |
-|---|---|---|
-| Стек | TypeScript, Vite, React, Zustand | Python, Flet ≥0.80 |
-| STT | Web Speech / Whisper tiny в браузере | whisper.cpp + faster-whisper |
-| Классификатор | мешок слов + MiniLM | Chroma + мешок слов |
-| Данные | localStorage, IndexedDB, Cache API | config.json, sqlite/json, APPDATA/models |
-| Запуск | превью чата | python main.py / flet build windows |
-| Git | этот репо, срез неполный | отдельный neural-dictaphone |
-
-Exe делает Flet по CLAUDE_CODE_PLAN.md, не Tauri.
+Python, Flet ≥0.86, whisper.cpp/OpenVINO + faster-whisper, мешок слов + cosine (LOGIC.md).
+Данные: `%LOCALAPPDATA%\Stenograf\` (`tasks.json`, `audio_queue`, `models`, `exports`).
+Запуск: `python -m ui.main` / сборка `flet build windows` (CLAUDE_CODE_PLAN.md).
 
 ## Требования продукта
 
@@ -39,8 +32,7 @@ Exe делает Flet по CLAUDE_CODE_PLAN.md, не Tauri.
 Задача: title, notes, due_at, remind_at, repeat_min, positive, negative, links, hits, misses.
 Встреча: title, started_at, ended_at, protocol_id.
 
-Превью: localStorage `stenograf-v1`, IndexedDB аудио, Cache API модели.
-Flet: data/app.json, audio_queue, `%LOCALAPPDATA%\\Stenograf\\models`.
+Flet: `%LOCALAPPDATA%\Stenograf\` — `tasks.json`, `audio_queue`, `models`, `exports`.
 
 ## Алгоритмы
 
@@ -52,9 +44,9 @@ Kind: решение/риск/блокер, порог ~0.6.
 
 ## Как пользоваться
 
-1. Превью чата Grok.
-2. Edge → установить как приложение.
-3. Ещё → выгрузить JSON.
-4. Exe: CLAUDE_CODE_PLAN.md в neural-dictaphone + flet build windows.
+1. `python -m ui.main` — dev-запуск.
+2. Ещё → скачать модель ASR (каталог, sha256).
+3. Ещё → JSON экспорт/импорт.
+4. Exe: `flet build windows` (CLAUDE_CODE_PLAN.md).
 
 Принципы: локально, модель не в бандле exe, UI не считает STT, на карте только суть.

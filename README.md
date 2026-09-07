@@ -2,13 +2,13 @@
 
 Локальный Windows-диктофон: речь → протокол → задачи.
 
-**Продукт для Windows:** `ui/` + `worker/`. Запуск:
+**Продукт для Windows:** `ui/` + `worker/` (Python, Flet). Запуск:
 
 ```bat
 python -m ui.main
 ```
 
-`src/` и Tauri (`src-tauri/`) — legacy web preview; **не развивать** под Windows MVP.
+Сборка exe: `flet build windows` — см. [CLAUDE_CODE_PLAN.md](./CLAUDE_CODE_PLAN.md) и [SETUP_WINDOWS.md](./SETUP_WINDOWS.md).
 
 ## Документы
 
@@ -39,4 +39,7 @@ python -m ui.main
 - [x] Flet UI: mic, очередь, протокол, backend/confidence
 - [x] Экспорт DOCX/HTML
 - [x] Классификатор / «Куда отнести?» — `task.suggest` (intent + cosine + feedback)
+- [x] Встречи: `meeting_id`, пауза протокола 8с отдельно от STT-паузы ~1с
+- [x] Карта связей: essence, авто-рёбра, drag-link, hide по клику
+- [x] Протокол: секции по kind, плейсхолдеры шаблона, пакет документов, .ics
 - [ ] Первый стабильный прогон на целевом Zenbook
