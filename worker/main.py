@@ -30,6 +30,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--segment-sec", type=float, default=5.0)
     parser.add_argument("--seconds", type=float, default=20.0, help="Demo run duration")
     parser.add_argument(
+        "--download-model",
+        metavar="ID",
+        help="Download model id from catalog (e.g. whisper-base) then exit",
+    )
+    parser.add_argument(
         "--backend",
         choices=("auto", "stub", "faster-whisper", "whisper.cpp"),
         default="auto",
@@ -41,6 +46,22 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps({"event": "hw.profile", "profile": profile.__dict__}, ensure_ascii=False), flush=True)
 
     entries = load_index()
+    # Always refresh missing url/sha from defaults for known ids
+    from worker.models_catalog import default_index, download_with_resume
+
+    defaults = {e.id: e for e in default_index()}
+    merged = []
+    seen = set()
+    for e in entries:
+        d = defaults.get(e.id)
+        if d and (not e.url or not e.sha256):
+            e = d
+        merged.append(e)
+        seen.add(e.id)
+    for mid, d in defaults.items():
+        if mid not in seen:
+            merged.append(d)
+    entries = merged
     save_index(entries)
     print(
         json.dumps(
@@ -54,6 +75,38 @@ def main(argv: list[str] | None = None) -> int:
         ),
         flush=True,
     )
+
+    if args.download_model:
+        from worker.models_catalog import download_with_resume
+
+        entry = next((e for e in entries if e.id == args.download_model), None)
+        if not entry:
+            raise SystemExit(f"unknown model id: {args.download_model}")
+
+        def progress(done, total):
+            print(
+                json.dumps(
+                    {
+                        "event": "models.download",
+                        "id": entry.id,
+                        "downloaded": done,
+                        "total": total,
+                    },
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+
+        path = download_with_resume(entry, progress_cb=progress)
+        print(
+            json.dumps(
+                {"event": "models.download", "id": entry.id, "path": str(path), "done": True},
+                ensure_ascii=False,
+            ),
+            flush=True,
+        )
+        return 0
+
 
     capture = CaptureSession(
         out_dir=data_root() / "audio_queue",

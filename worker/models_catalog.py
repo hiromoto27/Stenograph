@@ -41,30 +41,47 @@ def load_index() -> list[ModelEntry]:
 
 
 def default_index() -> list[ModelEntry]:
-    # Placeholders — replace URLs/sha256 with real whisper.cpp ggml artifacts.
+    # Official ggml weights from ggerganov/whisper.cpp (HF LFS oid = sha256).
+    base = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main"
     return [
         ModelEntry(
             id="whisper-tiny",
             filename="ggml-tiny.bin",
-            url="",
-            sha256="",
-            size_bytes=None,
+            url=f"{base}/ggml-tiny.bin",
+            sha256="be07e048e1e599ad46341c8d2a135645097a538221678b7acdd1b1919c6e1b21",
+            size_bytes=77691713,
+            profile="low",
+        ),
+        ModelEntry(
+            id="whisper-tiny-q5_1",
+            filename="ggml-tiny-q5_1.bin",
+            url=f"{base}/ggml-tiny-q5_1.bin",
+            sha256="818710568da3ca15689e31a743197b520007872ff9576237bda97bd1b469c3d7",
+            size_bytes=32152673,
             profile="low",
         ),
         ModelEntry(
             id="whisper-base",
             filename="ggml-base.bin",
-            url="",
-            sha256="",
-            size_bytes=None,
+            url=f"{base}/ggml-base.bin",
+            sha256="60ed5bc3dd14eea856493d334349b405782ddcaf0028d4b5df4088345fba2efe",
+            size_bytes=147951465,
+            profile="mid",
+        ),
+        ModelEntry(
+            id="whisper-base-q5_1",
+            filename="ggml-base-q5_1.bin",
+            url=f"{base}/ggml-base-q5_1.bin",
+            sha256="422f1ae452ade6f30a004d7e5c6a43195e4433bc370bf23fac9cc591f01a8898",
+            size_bytes=59707625,
             profile="mid",
         ),
         ModelEntry(
             id="whisper-small",
             filename="ggml-small.bin",
-            url="",
-            sha256="",
-            size_bytes=None,
+            url=f"{base}/ggml-small.bin",
+            sha256="1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b",
+            size_bytes=487601967,
             profile="mid",
         ),
     ]
@@ -87,8 +104,14 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def download_with_resume(entry: ModelEntry) -> Path:
-    """Download below capture/ASR priority — caller should schedule accordingly."""
+def download_with_resume(
+    entry: ModelEntry,
+    progress_cb=None,
+) -> Path:
+    """Download below capture/ASR priority — caller should schedule accordingly.
+
+    progress_cb(downloaded_bytes, total_bytes|None) optional.
+    """
     if not entry.url or not entry.sha256:
         raise ValueError(f"Model {entry.id} missing url/sha256 in catalog")
 
@@ -106,6 +129,9 @@ def download_with_resume(entry: ModelEntry) -> Path:
             if not block:
                 break
             out.write(block)
+            if progress_cb:
+                downloaded = part.stat().st_size
+                progress_cb(downloaded, entry.size_bytes)
 
     digest = sha256_file(part)
     if digest.lower() != entry.sha256.lower():

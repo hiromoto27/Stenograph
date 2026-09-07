@@ -49,6 +49,17 @@ Example `asr.result`:
 - Models live under `%LOCALAPPDATA%\Stenograf\models` + `index.json` (sha256 on downloads).
 - Embeddings/LLM must not run while ASR queue is busy (UI/other services).
 
+
+## Model catalog / download
+
+Default catalog (HF `ggerganov/whisper.cpp`) ships with url+sha256 for tiny/base/small (+ q5_1).
+
+```bat
+python -m worker.main --download-model whisper-base
+```
+
+Emits `models.download` progress events; stores under `%LOCALAPPDATA%\Stenograf\models`.
+
 ## Next
 
 1. Fill real model URLs/sha256 in catalog + downloader UX.
