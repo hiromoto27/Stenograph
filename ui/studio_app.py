@@ -13,7 +13,7 @@ from typing import Any
 import flet as ft
 
 from ui.export_protocol import ProtocolLine, default_export_dir, export_docx, export_html
-from ui.theme import ACCENT, ACCENT_FG, BG, BORDER, MUTED, SURFACE, SURFACE2, TEXT, page_theme
+from ui.theme import ACCENT, ACCENT_FG, BG, BORDER, MUTED, REC, REC_FG, SURFACE, SURFACE2, SURFACE3, TEXT, page_theme
 from ui.worker_client import WorkerClient
 
 TABS = ("Студия", "Карта", "Сроки", "Протокол", "Гайды", "Ещё")
@@ -77,6 +77,8 @@ def main(page: ft.Page) -> None:
     hw_label = ft.Text("Профиль: —", size=11, color=MUTED)
     backend_label = ft.Text("ASR: —", size=11, color=MUTED)
     status = ft.Text("", size=12, color=MUTED)
+    rec_dot = ft.Container(width=8, height=8, border_radius=4, bgcolor=REC, visible=False)
+    rec_label = ft.Text("Идёт запись", size=12, color=REC, visible=False)
     db_label = ft.Text("-60 дБ", size=12, color=MUTED)
     level_bar = ft.ProgressBar(value=0, height=10, color=ACCENT, bgcolor=BORDER)
     peak_level = 0.0
@@ -625,13 +627,19 @@ def main(page: ft.Page) -> None:
         nonlocal meeting_open
         meeting_open = True
         mid = model_dd.value or selected_model_id
+        rec_dot.visible = True
+        rec_label.visible = True
         set_status(f"Запись… модель={mid or 'auto'}")
         save_ui_settings(device_id=mic_dd.value, model_id=mid)
         client.start(mic_id=mic_dd.value, segment_sec=3.0, model_id=mid, seconds=0)
+        page.update()
 
     def stop_rec(_: ft.ControlEvent) -> None:
         client.stop()
+        rec_dot.visible = False
+        rec_label.visible = False
         set_status("Остановлено")
+        page.update()
 
     def do_export(kind: str) -> None:
         if not protocol_entries:
@@ -684,7 +692,7 @@ def main(page: ft.Page) -> None:
                 expand=True,
             ),
             border=ft.Border.all(1, BORDER),
-            border_radius=12,
+            border_radius=16,
             padding=12,
             expand=True,
             bgcolor=SURFACE,
@@ -693,7 +701,7 @@ def main(page: ft.Page) -> None:
             [
                 ft.Column(
                     [
-                        ft.Text("Студия", size=28, weight=ft.FontWeight.W_600, color=TEXT),
+                        ft.Text("Студия", size=32, weight=ft.FontWeight.W_600, color=TEXT, font_family="Georgia"),
                         ft.Text(
                             "Сначала откройте встречу — реплики лягут в неё. Пауза 8 с предлагает протокол.",
                             size=12,
@@ -715,7 +723,7 @@ def main(page: ft.Page) -> None:
                             ),
                             bgcolor=SURFACE,
                             border=ft.Border.all(1, BORDER),
-                            border_radius=12,
+                            border_radius=16,
                             padding=16,
                         ),
                         ft.Row(
@@ -748,28 +756,28 @@ def main(page: ft.Page) -> None:
                             [
                                 ft.FilledButton(
                                     content=ft.Row(
-                                        [ft.Icon(ft.Icons.MIC, size=16, color=ACCENT_FG), ft.Text("Записать")],
+                                        [ft.Icon(ft.Icons.MIC, size=16, color=REC_FG), ft.Text("Записать", color=REC_FG)],
                                         spacing=6,
                                         tight=True,
                                     ),
-                                    bgcolor=ACCENT,
-                                    color=ACCENT_FG,
-                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
+                                    bgcolor=REC,
+                                    color=REC_FG,
+                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12)),
                                     on_click=start_rec,
                                 ),
                                 ft.OutlinedButton(
                                     "Стоп",
-                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
+                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12)),
                                     on_click=stop_rec,
                                 ),
                                 ft.OutlinedButton(
                                     "Протокол",
-                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
+                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12)),
                                     on_click=lambda e: do_export("DOCX"),
                                 ),
                                 ft.OutlinedButton(
                                     "HTML",
-                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
+                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12)),
                                     on_click=lambda e: do_export("HTML"),
                                 ),
                             ],
@@ -777,7 +785,6 @@ def main(page: ft.Page) -> None:
                             spacing=8,
                         ),
                         queue_text,
-                        download_progress,
                         status,
                         classify_panel,
                         transcript_box,
@@ -789,7 +796,7 @@ def main(page: ft.Page) -> None:
                     width=280,
                     bgcolor=SURFACE,
                     border=ft.Border.all(1, BORDER),
-                    border_radius=12,
+                    border_radius=16,
                     padding=12,
                     content=ft.Column(
                         [
@@ -818,7 +825,7 @@ def main(page: ft.Page) -> None:
     def settings_view() -> ft.Control:
         return ft.Column(
             [
-                ft.Text("Настройки", size=28, weight=ft.FontWeight.W_600, color=TEXT),
+                ft.Text("Настройки", size=32, weight=ft.FontWeight.W_600, color=TEXT, font_family="Georgia"),
                 ft.Text("Native: профиль железа + каталог моделей (не WASM/Web Speech).", size=12, color=MUTED),
                 hw_label,
                 backend_label,
@@ -833,7 +840,7 @@ def main(page: ft.Page) -> None:
                 ft.Container(
                     content=models_view,
                     border=ft.Border.all(1, BORDER),
-                    border_radius=12,
+                    border_radius=16,
                     padding=10,
                     expand=True,
                     bgcolor=SURFACE,
@@ -883,7 +890,7 @@ def main(page: ft.Page) -> None:
                     ),
                     padding=ft.Padding.symmetric(vertical=8, horizontal=10),
                     border_radius=10,
-                    bgcolor="#262626" if selected else None,
+                    bgcolor=SURFACE3 if selected else None,
                     on_click=switch_tab(name),
                     expand=True,
                 )
@@ -908,7 +915,7 @@ def main(page: ft.Page) -> None:
                                 ),
                                 ft.Column(
                                     [
-                                        ft.Text("Стенограф", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
+                                        ft.Text("Стенограф", size=22, weight=ft.FontWeight.W_600, color=TEXT, font_family="Georgia"),
                                         ft.Text("Диктофон · карта · напоминания", size=11, color=MUTED),
                                     ],
                                     spacing=0,
@@ -928,7 +935,7 @@ def main(page: ft.Page) -> None:
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
-                ft.Row([hw_label, backend_label], spacing=16),
+                ft.Row([rec_dot, rec_label, hw_label, backend_label], spacing=12),
             ],
             spacing=8,
         ),
