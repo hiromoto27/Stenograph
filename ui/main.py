@@ -28,7 +28,7 @@ def main(page: ft.Page) -> None:
     models_root_label = ft.Text("Модели: —", size=12)
     status = ft.Text("Worker: остановлен", size=12)
     protocol_view = ft.ListView(expand=True, spacing=4, auto_scroll=True)
-    models_view = ft.ListView(height=140, spacing=4)
+    models_view = ft.ListView(height=200, spacing=4)
     queue_text = ft.Text("Очередь ASR: pending 0 · готово 0", size=13)
     download_progress = ft.ProgressBar(value=0, visible=False)
 
@@ -55,45 +55,71 @@ def main(page: ft.Page) -> None:
             models_view.controls.append(ft.Text("Каталог пуст — обнови список или дождись models.list", size=12))
             page.update()
             return
+
+        # Group by engine
+        order = ["whisper.cpp", "faster-whisper", "vosk", "silero-vad"]
+        groups: dict[str, list[dict[str, Any]]] = {}
         for row in model_rows:
-            mid = str(row.get("id") or "?")
-            profile = str(row.get("profile") or "")
-            filename = str(row.get("filename") or "")
-            has_url = bool(row.get("url"))
-            has_sha = bool(row.get("sha256"))
-            local = row.get("local_present")
-            bits = [mid]
-            if profile:
-                bits.append(f"profile={profile}")
-            if filename:
-                bits.append(filename)
-            if local is True:
-                bits.append("локально ✓")
-            elif local is False:
-                bits.append("нет файла")
-            ready = "готово к скачиванию" if has_url and has_sha else "нет url/sha256"
-            bits.append(ready)
-
-            def make_dl(model_id: str):
-                def _(_: ft.ControlEvent) -> None:
-                    download_model(model_id)
-
-                return _
-
+            eng = str(row.get("engine") or "other")
+            groups.setdefault(eng, []).append(row)
+        for eng in order + sorted(k for k in groups if k not in order):
+            rows = groups.get(eng)
+            if not rows:
+                continue
             models_view.controls.append(
-                ft.Row(
-                    [
-                        ft.Text(" · ".join(bits), size=12, expand=True),
-                        ft.OutlinedButton(
-                            "Скачать",
-                            on_click=make_dl(mid),
-                            disabled=not (has_url and has_sha),
-                        ),
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                )
+                ft.Text(eng, size=13, weight=ft.FontWeight.W_600)
             )
+            for row in rows:
+                mid = str(row.get("id") or "?")
+                profile = str(row.get("profile") or "")
+                filename = str(row.get("filename") or "")
+                notes = str(row.get("notes") or "")
+                has_url = bool(row.get("url"))
+                has_sha = bool(row.get("sha256"))
+                local = row.get("local_present")
+                can_download = eng != "faster-whisper" and has_url and has_sha
+
+                bits = [mid]
+                if profile:
+                    bits.append(f"profile={profile}")
+                if filename and eng != "faster-whisper":
+                    bits.append(filename)
+                elif filename and eng == "faster-whisper":
+                    bits.append(filename)
+                if local is True:
+                    bits.append("локально ✓")
+                elif local is False:
+                    bits.append("нет файла")
+                if eng == "faster-whisper":
+                    bits.append("качает library сама")
+                elif can_download:
+                    bits.append("готово к скачиванию")
+                else:
+                    bits.append("нет url/sha256")
+                if notes:
+                    bits.append(notes)
+
+                def make_dl(model_id: str):
+                    def _(_: ft.ControlEvent) -> None:
+                        download_model(model_id)
+
+                    return _
+
+                models_view.controls.append(
+                    ft.Row(
+                        [
+                            ft.Text(" · ".join(bits), size=12, expand=True),
+                            ft.OutlinedButton(
+                                "Скачать",
+                                on_click=make_dl(mid),
+                                disabled=not can_download,
+                            ),
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    )
+                )
         page.update()
+
 
     def load_models_from_disk() -> None:
         nonlocal model_rows
@@ -106,7 +132,12 @@ def main(page: ft.Page) -> None:
             root = models_root()
             model_rows = []
             for e in entries:
-                present = (root / e.filename).exists() if e.filename else False
+                # faster-whisper uses HF id as filename — not a local file path
+                engine = getattr(e, "engine", "") or ""
+                if engine == "faster-whisper":
+                    present = None
+                else:
+                    present = (root / e.filename).exists() if e.filename else False
                 model_rows.append(
                     {
                         "id": e.id,
@@ -115,6 +146,8 @@ def main(page: ft.Page) -> None:
                         "sha256": e.sha256,
                         "size_bytes": e.size_bytes,
                         "profile": e.profile,
+                        "engine": engine,
+                        "notes": getattr(e, "notes", "") or "",
                         "local_present": present,
                     }
                 )
@@ -269,13 +302,37 @@ def main(page: ft.Page) -> None:
         elif et == "models.list":
             root = event.get("root") or ""
             ids = event.get("ids") or []
+            models = event.get("models") or []
             count = event.get("count")
-            models_root_label.value = f"Модели: {root or '—'} · {count if count is not None else len(ids)} шт."
-            # Prefer full rows from disk; fall back to ids from event
-            load_models_from_disk()
-            if not model_rows and ids:
-                model_rows = [{"id": i, "url": "", "sha256": "", "profile": "", "filename": ""} for i in ids]
+            n = count if count is not None else (len(models) or len(ids))
+            models_root_label.value = f"Модели: {root or '—'} · {n} шт."
+            if models:
+                model_rows = []
+                for mrow in models:
+                    if not isinstance(mrow, dict):
+                        continue
+                    model_rows.append(
+                        {
+                            "id": mrow.get("id"),
+                            "filename": mrow.get("filename") or "",
+                            "url": mrow.get("url") or "",
+                            "sha256": mrow.get("sha256") or "",
+                            "size_bytes": mrow.get("size_bytes"),
+                            "profile": mrow.get("profile") or "",
+                            "engine": mrow.get("engine") or "",
+                            "notes": mrow.get("notes") or "",
+                            "local_present": mrow.get("local_present"),
+                        }
+                    )
                 render_models()
+            else:
+                load_models_from_disk()
+                if not model_rows and ids:
+                    model_rows = [
+                        {"id": i, "url": "", "sha256": "", "profile": "", "filename": "", "engine": ""}
+                        for i in ids
+                    ]
+                    render_models()
         elif et == "models.download":
             mid = event.get("id") or "?"
             download_progress.visible = True

@@ -34,3 +34,5 @@ Stenograph/
 ```
 
 Interim IPC: JSON lines on stdout. Download buttons stay disabled until catalog has real url/sha256.
+
+Models are grouped by `engine`. Download is disabled for `faster-whisper` (library pulls HF itself).
