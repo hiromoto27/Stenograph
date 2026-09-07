@@ -97,7 +97,17 @@ def main(argv: list[str] | None = None) -> int:
                 flush=True,
             )
 
-        path = download_with_resume(entry, progress_cb=progress)
+        try:
+            path = download_with_resume(entry, progress_cb=progress)
+        except Exception as exc:  # noqa: BLE001
+            print(
+                json.dumps(
+                    {"event": "models.download", "id": entry.id, "error": str(exc), "done": True},
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+            return 1
         print(
             json.dumps(
                 {"event": "models.download", "id": entry.id, "path": str(path), "done": True},
