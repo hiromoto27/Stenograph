@@ -9,7 +9,8 @@ import sys
 import time
 from pathlib import Path
 
-from worker.asr_queue import AsrQueue
+from worker.asr_backend import describe_backend, select_backend
+from worker.asr_queue import AsrJob, AsrQueue, AsrResult
 from worker.capture import CaptureSession
 from worker.hw_profile import detect_profile
 from worker.models_catalog import load_index, models_root, save_index
@@ -28,10 +29,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list-mics", action="store_true")
     parser.add_argument("--segment-sec", type=float, default=5.0)
     parser.add_argument("--seconds", type=float, default=20.0, help="Demo run duration")
+    parser.add_argument(
+        "--backend",
+        choices=("auto", "stub", "faster-whisper", "whisper.cpp"),
+        default="auto",
+        help="Force ASR backend (default: auto by hardware profile)",
+    )
     args = parser.parse_args(argv)
 
     profile = detect_profile()
-    print(json.dumps({"event": "hw.profile", "profile": profile.__dict__}, ensure_ascii=False))
+    print(json.dumps({"event": "hw.profile", "profile": profile.__dict__}, ensure_ascii=False), flush=True)
 
     entries = load_index()
     save_index(entries)
@@ -44,7 +51,8 @@ def main(argv: list[str] | None = None) -> int:
                 "ids": [e.id for e in entries],
             },
             ensure_ascii=False,
-        )
+        ),
+        flush=True,
     )
 
     capture = CaptureSession(
@@ -54,14 +62,56 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.list_mics:
-        print(json.dumps({"event": "mic.list", "devices": capture.list_input_devices()}, ensure_ascii=False))
+        print(
+            json.dumps({"event": "mic.list", "devices": capture.list_input_devices()}, ensure_ascii=False),
+            flush=True,
+        )
         return 0
 
-    asr = AsrQueue()
+    if args.backend == "stub":
+        from worker.asr_backend import StubBackend
+
+        backend = StubBackend()
+    elif args.backend == "faster-whisper":
+        from worker.asr_backend import FasterWhisperBackend
+
+        size = "tiny" if profile.name == "low" else ("small" if profile.name == "high" else "base")
+        backend = FasterWhisperBackend(model_size=size)
+    elif args.backend == "whisper.cpp":
+        from worker.asr_backend import WhisperCppOpenVinoBackend, _find_whisper_cpp, _pick_model_file
+
+        binary = _find_whisper_cpp()
+        model = _pick_model_file(profile)
+        if not binary or not model:
+            raise SystemExit("whisper.cpp binary/model not found; set STENOGRAF_WHISPER_CPP / models dir")
+        backend = WhisperCppOpenVinoBackend(binary, model)
+    else:
+        backend = select_backend(profile)
+
+    print(json.dumps({"event": "asr.backend", **describe_backend(backend)}, ensure_ascii=False), flush=True)
+
+    def run_job(job: AsrJob) -> AsrResult:
+        try:
+            tr = backend.transcribe(job.wav_path, language=job.language)
+            return AsrResult(
+                job_id=job.id,
+                text=tr.text,
+                confidence=tr.confidence,
+                backend=tr.backend,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return AsrResult(
+                job_id=job.id,
+                text="",
+                confidence=None,
+                backend=getattr(backend, "name", "error"),
+                error=str(exc),
+            )
+
+    asr = AsrQueue(worker_fn=run_job)
     asr.start()
 
     def on_chunk(ev) -> None:
-        # Invariant: only enqueue — never run STT here.
         print(
             json.dumps(
                 {
@@ -72,14 +122,18 @@ def main(argv: list[str] | None = None) -> int:
                     "started_at": ev.started_at,
                 },
                 ensure_ascii=False,
-            )
+            ),
+            flush=True,
         )
         job = asr.enqueue(ev.path, language="ru")
-        print(json.dumps({"event": "asr.job", "id": job.id, "pending": asr.pending()}, ensure_ascii=False))
+        print(
+            json.dumps({"event": "asr.job", "id": job.id, "pending": asr.pending()}, ensure_ascii=False),
+            flush=True,
+        )
 
     capture.on_chunk = on_chunk
     capture.start()
-    print(json.dumps({"event": "capture.started", "device_id": args.device}, ensure_ascii=False))
+    print(json.dumps({"event": "capture.started", "device_id": args.device}, ensure_ascii=False), flush=True)
 
     deadline = time.time() + args.seconds
     try:
@@ -92,21 +146,22 @@ def main(argv: list[str] | None = None) -> int:
                             "event": "asr.result",
                             "job_id": result.job_id,
                             "text": result.text,
+                            "confidence": result.confidence,
                             "backend": result.backend,
                             "error": result.error,
                         },
                         ensure_ascii=False,
-                    )
+                    ),
+                    flush=True,
                 )
     finally:
         capture.stop()
         asr.stop()
-        print(json.dumps({"event": "capture.stopped"}, ensure_ascii=False))
+        print(json.dumps({"event": "capture.stopped"}, ensure_ascii=False), flush=True)
 
     return 0
 
 
 if __name__ == "__main__":
-    # Allow `python -m worker.main` from repo root with PYTHONPATH=.
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     raise SystemExit(main())
