@@ -126,33 +126,67 @@ def main(page: ft.Page) -> None:
         page.update()
 
     def download_model(model_id: str) -> None:
+        """Spawn worker --download-model so UI gets models.download events."""
+        import os
+        import subprocess
+        import threading
+
+        if not (repo_root / "worker" / "main.py").exists():
+            status.value = "Нет worker/ — скачивание недоступно"
+            page.update()
+            return
+
+        # Pre-check catalog for url/sha256 so button feedback is clear
         try:
             if str(repo_root) not in sys.path:
                 sys.path.insert(0, str(repo_root))
-            from worker.models_catalog import download_with_resume, load_index  # type: ignore
+            from worker.models_catalog import load_index  # type: ignore
 
-            entries = {e.id: e for e in load_index()}
-            entry = entries.get(model_id)
-            if not entry:
-                status.value = f"Модель {model_id} не найдена в index"
+            entry = next((e for e in load_index() if e.id == model_id), None)
+            if entry and (not entry.url or not entry.sha256):
+                status.value = f"{model_id}: пустые url/sha256 в каталоге"
                 page.update()
                 return
-            if not entry.url or not entry.sha256:
-                status.value = f"{model_id}: в каталоге пустые url/sha256 — ждём заполнения worker"
+        except Exception:
+            pass
+
+        download_progress.visible = True
+        download_progress.value = None
+        status.value = f"Скачивание {model_id}…"
+        page.update()
+
+        def _run() -> None:
+            env = os.environ.copy()
+            env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
+            try:
+                proc = subprocess.Popen(
+                    [sys.executable, "-m", "worker.main", "--download-model", model_id],
+                    cwd=str(repo_root),
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                )
+                assert proc.stdout is not None
+                for line in proc.stdout:
+                    line = line.strip()
+                    if line.startswith("{"):
+                        try:
+                            on_event(json.loads(line))
+                        except json.JSONDecodeError:
+                            pass
+                code = proc.wait()
+                if code != 0:
+                    status.value = f"Скачивание {model_id}: worker exit {code}"
+                    download_progress.visible = False
+                    page.update()
+            except Exception as exc:  # noqa: BLE001
+                download_progress.visible = False
+                status.value = f"Ошибка скачивания: {exc}"
                 page.update()
-                return
-            download_progress.visible = True
-            download_progress.value = None  # indeterminate
-            status.value = f"Скачивание {model_id} (ниже приоритета ASR)…"
-            page.update()
-            path = download_with_resume(entry)
-            download_progress.visible = False
-            status.value = f"Скачано: {path}"
-            load_models_from_disk()
-        except Exception as exc:  # noqa: BLE001
-            download_progress.visible = False
-            status.value = f"Ошибка скачивания: {exc}"
-            page.update()
+
+        threading.Thread(target=_run, daemon=True).start()
 
     def on_event(event: dict[str, Any]) -> None:
         nonlocal queue_pending, queue_done, mics, model_rows
@@ -244,20 +278,26 @@ def main(page: ft.Page) -> None:
                 render_models()
         elif et == "models.download":
             mid = event.get("id") or "?"
-            prog = event.get("progress")
-            if prog is None:
-                download_progress.visible = True
-                download_progress.value = None
-            else:
-                download_progress.visible = True
-                try:
-                    download_progress.value = float(prog)
-                except (TypeError, ValueError):
-                    download_progress.value = None
-            status.value = f"Скачивание {mid}: {prog if prog is not None else '…'}"
+            download_progress.visible = True
             if event.get("done"):
                 download_progress.visible = False
+                download_progress.value = 0
+                path_done = event.get("path") or ""
+                status.value = f"Скачано {mid}: {path_done}" if path_done else f"Скачано {mid}"
                 load_models_from_disk()
+            elif event.get("error"):
+                download_progress.visible = False
+                status.value = f"Ошибка скачивания {mid}: {event.get('error')}"
+            else:
+                downloaded = event.get("downloaded")
+                total = event.get("total")
+                if isinstance(downloaded, (int, float)) and isinstance(total, (int, float)) and total > 0:
+                    download_progress.value = float(downloaded) / float(total)
+                    pct = 100.0 * float(downloaded) / float(total)
+                    status.value = f"Скачивание {mid}: {pct:.0f}% ({downloaded}/{total})"
+                else:
+                    download_progress.value = None
+                    status.value = f"Скачивание {mid}…"
         page.update()
 
     repo_root = Path(__file__).resolve().parents[1]
