@@ -7,6 +7,7 @@ from typing import Any
 
 import flet as ft
 
+from ui.export_protocol import ProtocolLine, export_docx, export_html, default_export_dir
 from ui.worker_client import WorkerClient
 
 
@@ -17,7 +18,7 @@ def main(page: ft.Page) -> None:
     page.padding = 16
 
     mics: list[dict[str, Any]] = []
-    protocol_lines: list[str] = []
+    protocol_entries: list[ProtocolLine] = []
     queue_pending = 0
     queue_done = 0
     hw_label = ft.Text("Профиль железа: —", size=12)
@@ -32,9 +33,10 @@ def main(page: ft.Page) -> None:
         dense=True,
     )
 
-    def append_protocol(prefix: str, text: str) -> None:
+    def append_protocol(prefix: str, text: str, *, job_id: str = "", backend: str = "") -> None:
+        entry = ProtocolLine(text=text, job_id=job_id or prefix, backend=backend)
+        protocol_entries.append(entry)
         line = f"[{prefix}] {text}" if prefix else text
-        protocol_lines.append(line)
         protocol_view.controls.append(ft.Text(line, selectable=True, size=13))
         page.update()
 
@@ -97,12 +99,12 @@ def main(page: ft.Page) -> None:
             job_id = str(event.get("job_id") or "")
             backend = event.get("backend") or ""
             if err:
-                append_protocol(job_id or "err", f"ERROR ({backend}): {err}")
+                append_protocol(job_id or "err", f"ERROR ({backend}): {err}", job_id=job_id, backend=str(backend))
             elif text:
                 prefix = job_id
                 if backend:
                     prefix = f"{job_id} · {backend}" if job_id else str(backend)
-                append_protocol(prefix, text)
+                append_protocol(prefix, text, job_id=job_id, backend=str(backend))
         elif et == "models.list":
             models = event.get("models") or []
             status.value = f"Модели: {len(models)} в каталоге"
@@ -158,8 +160,20 @@ def main(page: ft.Page) -> None:
             status.value = f"Ошибка mic list: {exc}"
         page.update()
 
-    def export_stub(kind: str) -> None:
-        status.value = f"Экспорт {kind}: post-process из protocol (TODO)"
+    def do_export(kind: str) -> None:
+        if not protocol_entries:
+            status.value = "Экспорт: протокол пуст"
+            page.update()
+            return
+        out_dir = default_export_dir()
+        try:
+            if kind == "DOCX":
+                path = export_docx(protocol_entries, out_dir / "protocol-latest.docx")
+            else:
+                path = export_html(protocol_entries, out_dir / "protocol-latest.html")
+            status.value = f"Экспорт {kind}: {path}"
+        except Exception as exc:  # noqa: BLE001
+            status.value = f"Экспорт {kind} ошибка: {exc}"
         page.update()
 
     page.add(
@@ -179,8 +193,8 @@ def main(page: ft.Page) -> None:
                     [
                         ft.FilledButton("Старт", on_click=start_click),
                         ft.OutlinedButton("Стоп", on_click=stop_click),
-                        ft.OutlinedButton("DOCX", on_click=lambda e: export_stub("DOCX")),
-                        ft.OutlinedButton("HTML", on_click=lambda e: export_stub("HTML")),
+                        ft.OutlinedButton("DOCX", on_click=lambda e: do_export("DOCX")),
+                        ft.OutlinedButton("HTML", on_click=lambda e: do_export("HTML")),
                     ],
                     wrap=True,
                 ),

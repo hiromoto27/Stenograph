@@ -33,3 +33,8 @@ Stenograph/
 ```
 
 Interim IPC only — later replace with a dedicated channel if needed.
+
+## Export
+
+`ui/export_protocol.py` — offline DOCX (`python-docx`) and interactive HTML (TOC + anchors).
+Default output: `%LOCALAPPDATA%\Stenograf\exports` on Windows, else `~/.local/share/Stenograf/exports`.
