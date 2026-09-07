@@ -603,6 +603,40 @@ def main(page: ft.Page) -> None:
         spacing=8,
     )
 
+    def start_rec(_: ft.ControlEvent) -> None:
+        nonlocal meeting_open
+        meeting_open = True
+        mid = model_dd.value or selected_model_id
+        rec_dot.visible = True
+        rec_label.visible = True
+        set_status(f"Запись… модель={mid or 'auto'}")
+        save_ui_settings(device_id=mic_dd.value, model_id=mid)
+        client.start(mic_id=mic_dd.value, segment_sec=3.0, model_id=mid, seconds=0)
+        page.update()
+
+    def stop_rec(_: ft.ControlEvent) -> None:
+        client.stop()
+        rec_dot.visible = False
+        rec_label.visible = False
+        set_status("Остановлено")
+        page.update()
+
+    def do_export(kind: str) -> None:
+        if not protocol_entries:
+            set_status("Протокол пуст")
+            return
+        out = default_export_dir()
+        try:
+            path = (
+                export_docx(protocol_entries, out / "protocol-latest.docx")
+                if kind == "DOCX"
+                else export_html(protocol_entries, out / "protocol-latest.html")
+            )
+            set_status(f"Экспорт {kind}: {path}")
+        except Exception as exc:  # noqa: BLE001
+            set_status(f"Экспорт ошибка: {exc}")
+
+
     def stub_view(title: str, hint: str) -> ft.Control:
         return ft.Column(
             [
