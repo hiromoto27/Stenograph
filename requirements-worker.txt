@@ -1,0 +1,5 @@
+# Stenograph native worker (Windows)
+sounddevice>=0.5.0
+numpy>=1.26
+psutil>=5.9
+# Later: faster-whisper / whisper.cpp bindings / OpenVINO
