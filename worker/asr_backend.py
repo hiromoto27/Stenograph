@@ -121,10 +121,24 @@ class FasterWhisperBackend:
                 f"faster-whisper failed to load '{model_size}': {last_exc}"
             )
 
+    def _transcribe_once(self, wav_path: Path, language: str, *, vad_filter: bool):
+        return self._model.transcribe(
+            str(wav_path),
+            language=language,
+            vad_filter=vad_filter,
+            beam_size=5,
+            best_of=5,
+            condition_on_previous_text=False,
+        )
+
     def transcribe(self, wav_path: Path, language: str = "ru") -> Transcription:
+        import os
+
         t0 = time.time()
+        # VAD often drops quiet RU speech on short segments → empty text. Off by default.
+        use_vad = os.environ.get("STENOGRAF_VAD", "").strip().lower() in {"1", "true", "yes"}
         try:
-            segments, info = self._model.transcribe(str(wav_path), language=language, vad_filter=True)
+            segments, info = self._transcribe_once(wav_path, language, vad_filter=use_vad)
         except Exception as exc:  # noqa: BLE001
             if self.device == "cpu":
                 raise
@@ -135,15 +149,25 @@ class FasterWhisperBackend:
             self.fallback_note = f"CUDA infer failed ({exc}); switched to cpu/int8"
             self.device = "cpu"
             self.compute_type = "int8"
-            segments, info = self._model.transcribe(str(wav_path), language=language, vad_filter=True)
-        parts: list[str] = []
-        probs: list[float] = []
-        for seg in segments:
-            parts.append(seg.text.strip())
-            if seg.avg_logprob is not None:
-                probs.append(max(0.0, min(1.0, 1.0 + float(seg.avg_logprob) / 5.0)))
-        text = " ".join(p for p in parts if p).strip()
-        conf = sum(probs) / len(probs) if probs else None
+            segments, info = self._transcribe_once(wav_path, language, vad_filter=use_vad)
+
+        def _collect(segs) -> tuple[str, float | None]:
+            parts: list[str] = []
+            probs: list[float] = []
+            for seg in segs:
+                parts.append(seg.text.strip())
+                if seg.avg_logprob is not None:
+                    probs.append(max(0.0, min(1.0, 1.0 + float(seg.avg_logprob) / 5.0)))
+            text = " ".join(p for p in parts if p).strip()
+            conf = sum(probs) / len(probs) if probs else None
+            return text, conf
+
+        text, conf = _collect(segments)
+        # If VAD ate everything, retry once without it
+        if not text and use_vad:
+            segments, info = self._transcribe_once(wav_path, language, vad_filter=False)
+            text, conf = _collect(segments)
+
         backend = f"{self.name}:{self._model_size}:{self.device}"
         return Transcription(
             text=text,
