@@ -159,8 +159,14 @@ def main(page: ft.Page) -> None:
         border_color=BORDER,
     )
 
-    body = ft.Container(expand=True, bgcolor=BG, padding=16)
-    nav_row = ft.Row(spacing=8)
+    body = ft.Container(expand=True, bgcolor=BG, padding=20)
+    nav_row = ft.Row(spacing=4, alignment=ft.MainAxisAlignment.SPACE_AROUND, expand=True)
+    bottom_nav = ft.Container(
+        bgcolor=SURFACE,
+        padding=ft.Padding.symmetric(vertical=10, horizontal=8),
+        border=ft.Border(top=ft.BorderSide(1, BORDER)),
+        content=nav_row,
+    )
 
     def set_status(msg: str) -> None:
         status.value = msg
@@ -668,7 +674,7 @@ def main(page: ft.Page) -> None:
                 [
                     ft.Text("ТРАНСКРИПТ", size=11, color=MUTED),
                     ft.Text(
-                        "Реплик пока нет. Нажмите «Записать».",
+                        "Реплик пока нет. Нажмите «Записать» или откройте встречу.",
                         color=MUTED,
                         size=13,
                     ),
@@ -689,7 +695,7 @@ def main(page: ft.Page) -> None:
                     [
                         ft.Text("Студия", size=28, weight=ft.FontWeight.W_600, color=TEXT),
                         ft.Text(
-                            "Сначала откройте встречу — реплики лягут в неё.",
+                            "Сначала откройте встречу — реплики лягут в неё. Пауза 8 с предлагает протокол.",
                             size=12,
                             color=MUTED,
                         ),
@@ -740,12 +746,35 @@ def main(page: ft.Page) -> None:
                         ),
                         ft.Row(
                             [
-                                ft.FilledButton("Записать", bgcolor=ACCENT, color=ACCENT_FG, on_click=start_rec),
-                                ft.OutlinedButton("Стоп", on_click=stop_rec),
-                                ft.OutlinedButton("Протокол DOCX", on_click=lambda e: do_export("DOCX")),
-                                ft.OutlinedButton("HTML", on_click=lambda e: do_export("HTML")),
+                                ft.FilledButton(
+                                    content=ft.Row(
+                                        [ft.Icon(ft.Icons.MIC, size=16, color=ACCENT_FG), ft.Text("Записать")],
+                                        spacing=6,
+                                        tight=True,
+                                    ),
+                                    bgcolor=ACCENT,
+                                    color=ACCENT_FG,
+                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
+                                    on_click=start_rec,
+                                ),
+                                ft.OutlinedButton(
+                                    "Стоп",
+                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
+                                    on_click=stop_rec,
+                                ),
+                                ft.OutlinedButton(
+                                    "Протокол",
+                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
+                                    on_click=lambda e: do_export("DOCX"),
+                                ),
+                                ft.OutlinedButton(
+                                    "HTML",
+                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
+                                    on_click=lambda e: do_export("HTML"),
+                                ),
                             ],
                             wrap=True,
+                            spacing=8,
                         ),
                         queue_text,
                         download_progress,
@@ -844,39 +873,58 @@ def main(page: ft.Page) -> None:
             selected = name == active_tab
             nav_row.controls.append(
                 ft.Container(
-                    content=ft.Text(name, size=13, color=TEXT if selected else MUTED),
-                    padding=ft.Padding.symmetric(vertical=8, horizontal=12),
-                    border=ft.Border.all(1, ACCENT if selected else BORDER),
-                    border_radius=8,
-                    bgcolor=SURFACE2 if selected else None,
+                    content=ft.Column(
+                        [
+                            ft.Text(name, size=11, weight=ft.FontWeight.W_600 if selected else None,
+                                    color=TEXT if selected else MUTED),
+                        ],
+                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                        spacing=0,
+                    ),
+                    padding=ft.Padding.symmetric(vertical=8, horizontal=10),
+                    border_radius=10,
+                    bgcolor="#262626" if selected else None,
                     on_click=switch_tab(name),
+                    expand=True,
                 )
             )
 
     header = ft.Container(
-        bgcolor=SURFACE,
-        padding=ft.Padding.symmetric(vertical=12, horizontal=16),
-        border=ft.Border(bottom=ft.BorderSide(1, BORDER)),
+        bgcolor=BG,
+        padding=ft.Padding.symmetric(vertical=14, horizontal=20),
         content=ft.Column(
             [
                 ft.Row(
                     [
-                        ft.Column(
+                        ft.Row(
                             [
-                                ft.Text("Стенограф", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
-                                ft.Text("Диктофон · карта · напоминания", size=11, color=MUTED),
+                                ft.Container(
+                                    content=ft.Icon(ft.Icons.MIC, color=TEXT, size=18),
+                                    width=36,
+                                    height=36,
+                                    bgcolor=SURFACE2,
+                                    border_radius=18,
+                                    alignment=ft.Alignment.CENTER,
+                                ),
+                                ft.Column(
+                                    [
+                                        ft.Text("Стенограф", size=18, weight=ft.FontWeight.BOLD, color=TEXT),
+                                        ft.Text("Диктофон · карта · напоминания", size=11, color=MUTED),
+                                    ],
+                                    spacing=0,
+                                ),
                             ],
-                            spacing=0,
+                            spacing=10,
                         ),
                         ft.Container(expand=True),
                         ft.TextField(
                             hint_text="Поиск по архиву",
-                            width=280,
+                            width=260,
                             dense=True,
-                            bgcolor=SURFACE2,
+                            bgcolor=SURFACE,
                             border_color=BORDER,
+                            border_radius=20,
                         ),
-                        nav_row,
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
                 ),
@@ -888,7 +936,7 @@ def main(page: ft.Page) -> None:
 
     rebuild_nav()
     render_body()
-    page.add(ft.Column([header, body], expand=True, spacing=0))
+    page.add(ft.Column([header, body, bottom_nav], expand=True, spacing=0))
     refresh_tasks_sidebar()
     refresh_mics()
     load_models_from_disk()
