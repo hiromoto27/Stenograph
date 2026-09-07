@@ -512,7 +512,7 @@ def main(page: ft.Page) -> None:
             nav_row.controls.append(
                 ft.Container(
                     content=ft.Text(name, size=13, color=TEXT if selected else MUTED),
-                    padding=ft.Padding.symmetric(8, 12),
+                    padding=ft.Padding.symmetric(vertical=8, horizontal=12),
                     border=ft.Border.all(1, ACCENT if selected else BORDER),
                     border_radius=8,
                     bgcolor=SURFACE2 if selected else None,
@@ -522,7 +522,7 @@ def main(page: ft.Page) -> None:
 
     header = ft.Container(
         bgcolor=SURFACE,
-        padding=ft.Padding.symmetric(12, 16),
+        padding=ft.Padding.symmetric(vertical=12, horizontal=16),
         border=ft.Border(bottom=ft.BorderSide(1, BORDER)),
         content=ft.Column(
             [
