@@ -15,7 +15,12 @@ import flet as ft
 
 from ui.export_protocol import ProtocolLine, default_export_dir, export_docx, export_html
 from ui.theme import ACCENT, ACCENT_FG, BG, BORDER, MUTED, OK, REC, REC_FG, SURFACE, SURFACE2, SURFACE3, TEXT, page_theme
-from ui.browser_stt import build_webview, webview_available
+from ui.browser_stt import (
+    build_webview,
+    resolve_stt_engine,
+    should_fallback_to_whisper,
+    webview_available,
+)
 from ui.worker_client import WorkerClient
 
 TABS = ("Студия", "Карта", "Сроки", "Протокол", "Гайды", "Ещё")
@@ -542,17 +547,18 @@ def main(page: ft.Page) -> None:
 
     def on_engine_pick(_: ft.ControlEvent) -> None:
         nonlocal asr_engine
-        asr_engine = engine_dd.value or "whisper"
+        preferred = engine_dd.value or "whisper"
+        effective, reason = resolve_stt_engine(preferred)
+        asr_engine = effective
+        engine_dd.value = effective
         save_ui_settings(asr_engine=asr_engine)
-        avail = webview_available()
-        if asr_engine == "browser" and not avail:
-            set_status("Browser STT: поставьте flet-webview-all (Windows + WebView2)")
-        else:
-            set_status(f"Движок: {asr_engine}")
+        set_status(reason or f"Движок: {asr_engine}")
+        page.update()
 
     engine_dd.on_change = on_engine_pick
 
     def on_browser_message(msg: dict) -> None:
+        nonlocal asr_engine
         mtype = msg.get("type")
         uid = str(msg.get("utterance_id") or f"b-{int(__import__('time').time())}")
         text_value = str(msg.get("text") or "").strip()
@@ -568,7 +574,14 @@ def main(page: ft.Page) -> None:
             client.send({"event": "asr.final", "utterance_id": uid, "text": text_value, "engine": "browser"})
             page.update()
         elif mtype == "error":
-            set_status(f"Browser STT: {msg.get('error')}")
+            err = str(msg.get("error") or "")
+            if should_fallback_to_whisper(err):
+                asr_engine = "whisper"
+                engine_dd.value = "whisper"
+                save_ui_settings(asr_engine="whisper")
+                set_status(f"Browser: {err} — фолбэк на Whisper (перезапустите Запись)")
+            else:
+                set_status(f"Browser STT: {err}")
 
     browser_host, browser_start, browser_stop = build_webview(on_browser_message)
 
@@ -687,20 +700,26 @@ def main(page: ft.Page) -> None:
     )
 
     def start_rec(_: ft.ControlEvent) -> None:
-        nonlocal meeting_open, recording
+        nonlocal meeting_open, recording, asr_engine
         meeting_open = True
         mid = model_dd.value or selected_model_id
         recording = True
         rec_dot.visible = True
         rec_label.visible = True
-        set_status(f"Запись… модель={mid or 'auto'}")
-        save_ui_settings(device_id=mic_dd.value, model_id=mid)
-        client.start(mic_id=mic_dd.value, segment_sec=3.0, model_id=mid, seconds=0, stt_engine=asr_engine)
-        if asr_engine == "browser" and browser_start:
+        preferred = asr_engine
+        effective, reason = resolve_stt_engine(preferred, has_webview=bool(browser_start))
+        if effective != preferred:
+            asr_engine = effective
+            engine_dd.value = effective
+            save_ui_settings(asr_engine=effective, device_id=mic_dd.value, model_id=mid)
+            set_status(reason)
+        else:
+            save_ui_settings(device_id=mic_dd.value, model_id=mid)
+            set_status(f"Запись… модель={mid or 'auto'} · {effective}")
+        client.start(mic_id=mic_dd.value, segment_sec=3.0, model_id=mid, seconds=0, stt_engine=effective)
+        if effective == "browser" and browser_start:
             browser_start(f"b-{int(__import__('time').time())}")
             set_status("Browser STT + VU (sounddevice)")
-        elif asr_engine == "browser":
-            set_status("Browser выбран, но WebView недоступен — идёт только Whisper worker")
         page.update()
 
     def stop_rec(_: ft.ControlEvent) -> None:

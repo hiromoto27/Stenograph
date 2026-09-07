@@ -91,3 +91,12 @@ python -m ui.main
    `del %LOCALAPPDATA%\Stenograf\models\index.json`
 4. HF ReadTimeout: `set HF_HUB_DOWNLOAD_TIMEOUT=300` и повтори, либо качай ggml:
    `python -m worker.main --download-model whisper-base`
+
+
+## STT (Whisper / Browser)
+
+- **Default engine:** `whisper` (local). Optional UI: Ещё → `browser` (Edge Web Speech via WebView2).
+- **Browser needs:** `pip install flet-webview-all` + mic permission in WebView. If WebView missing or mic `not-allowed`, UI falls back to Whisper (no silent failure).
+- **VAD:** on by default with speech pad (~300 ms). Empty transcript → one retry without VAD. Force off: `STENOGRAF_VAD=0`.
+- **RMS:** does **not** drop quiet speech (gate default off). Low mic → `mic.warn` / UI hint only. Optional hard gate: `STENOGRAF_ASR_RMS_MIN=0.005` (not recommended as default).
+- **Worker flag:** `--stt-engine browser` or `STENOGRAF_STT_ENGINE=browser` — capture/VU only, no local Whisper enqueue (UI owns finals via `asr.final`).

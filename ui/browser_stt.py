@@ -1,7 +1,7 @@
 """Optional Edge/WebView2 host for Web Speech (engine=browser).
 
-Requires `flet-webview-all` on Windows + WebView2 runtime. Without it the UI
-falls back to a status message; whisper path stays available.
+Requires `flet-webview-all` on Windows + WebView2 runtime.
+If WebView/mic is missing, callers must fall back to whisper — never silent.
 """
 from __future__ import annotations
 
@@ -13,13 +13,44 @@ OnMessage = Callable[[dict[str, Any]], None]
 
 HTML_PATH = Path(__file__).resolve().parent / "assets" / "browser_stt.html"
 
+# Web Speech errors that mean "use Whisper instead", not "keep waiting"
+_FALLBACK_ERRORS = {
+    "not-allowed",
+    "service-not-allowed",
+    "audio-capture",
+    "network",
+    "language-not-supported",
+}
+
 
 def webview_available() -> bool:
     try:
         import flet_webview_all  # noqa: F401
+
         return True
     except Exception:
         return False
+
+
+def resolve_stt_engine(preferred: str, *, has_webview: bool | None = None) -> tuple[str, str]:
+    """Return (effective_engine, human reason). Never returns browser without WebView."""
+    pref = (preferred or "whisper").strip().lower()
+    if pref != "browser":
+        return "whisper", ""
+    ok = webview_available() if has_webview is None else bool(has_webview)
+    if not ok:
+        return (
+            "whisper",
+            "Browser недоступен (нет flet-webview-all / WebView2) — переключился на Whisper",
+        )
+    return "browser", ""
+
+
+def should_fallback_to_whisper(error: str | None) -> bool:
+    if not error:
+        return False
+    low = str(error).strip().lower()
+    return low in _FALLBACK_ERRORS or low.startswith("not-allowed")
 
 
 def build_webview(on_message: OnMessage, *, width: int = 1, height: int = 1):
@@ -49,7 +80,6 @@ def build_webview(on_message: OnMessage, *, width: int = 1, height: int = 1):
         javascript_enabled=True,
         on_javascript_message=_on_js if hasattr(WebView, "__init__") else None,
     )
-    # Best-effort attach common callback names across package versions
     for attr in ("on_javascript_message", "on_web_message", "on_message"):
         if hasattr(wv, attr):
             setattr(wv, attr, _on_js)
