@@ -263,8 +263,14 @@ def main(page: ft.Page) -> None:
                 )
         elif et == "asr.backend":
             name = event.get("backend") or event.get("name") or "?"
-            detail = event.get("detail") or event.get("reason") or ""
-            backend_label.value = f"ASR backend: {name}" + (f" · {detail}" if detail else "")
+            bits = [str(name)]
+            for key in ("device", "model_size", "compute_type"):
+                if event.get(key):
+                    bits.append(f"{key}={event.get(key)}")
+            detail = event.get("detail") or event.get("reason") or event.get("warning") or ""
+            if detail:
+                bits.append(str(detail))
+            backend_label.value = "ASR backend: " + " · ".join(bits)
         elif et == "asr.job":
             pending = event.get("pending")
             if isinstance(pending, int):
