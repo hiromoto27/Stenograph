@@ -821,6 +821,32 @@ def main(page: ft.Page) -> None:
 
         return _
 
+    def refresh_mics(_: ft.ControlEvent | None = None) -> None:
+        if not (repo_root / "worker" / "main.py").exists():
+            mic_dd.options = [ft.dropdown.Option(key="default", text="Микрофон по умолчанию")]
+            mic_dd.value = "default"
+            set_status("Демо без worker/")
+            return
+        env = os.environ.copy()
+        env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
+        try:
+            out = subprocess.check_output(
+                [sys.executable, "-m", "worker.main", "--list-mics"],
+                cwd=str(repo_root),
+                env=env,
+                text=True,
+                timeout=30,
+            )
+            for line in out.splitlines():
+                line = line.strip()
+                if line.startswith("{"):
+                    try:
+                        on_event(json.loads(line))
+                    except json.JSONDecodeError:
+                        pass
+        except Exception as exc:  # noqa: BLE001
+            set_status(f"mic list: {exc}")
+
     def rebuild_nav() -> None:
         nav_row.controls.clear()
         for name in TABS:
