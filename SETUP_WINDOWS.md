@@ -93,6 +93,31 @@ python -m ui.main
    `python -m worker.main --download-model whisper-base`
 
 
+## 7. Сборка exe (`flet build windows`)
+
+CLAUDE_CODE_PLAN.md, спринт F. Модели остаются вне exe — `models_root()`
+(`worker/models_catalog.py`) всегда резолвится через `%LOCALAPPDATA%`,
+поэтому обновление exe эту папку не трогает (её вообще нет рядом с exe).
+
+```bat
+pip install -r requirements-worker.txt -r requirements-ui.txt flet-cli==0.86.5
+flet build windows . --module-name ui.main --yes --product "Стенограф" --org stenograph
+```
+
+`--module-name ui.main` обязателен: точка входа — `ui/main.py`, а не
+корневой `main.py`, который `flet build` ищет по умолчанию.
+`python_app_path` = `.` (корень репо), так что `worker/` попадает в
+сборку рядом с `ui/` — это нужно для дочернего процесса воркера.
+
+**Не проверено на реальной Windows-машине в этой сессии** (сборка требует
+Flutter + Windows SDK, недоступные в песочнице): worker в dev-режиме
+запускается как **отдельный процесс** (`ui/worker_client.py` зовёт
+`sys.executable -m worker.main`) с IPC через stdin/stdout. Flet
+бандлит переносимый интерпретатор Python вместе с приложением, и на
+практике такие подпроцессы у Flet-приложений работают — но перед
+релизом стоит собрать exe и вручную проверить, что кнопка «Записать»
+поднимает воркер и события идут в UI, а не тихо падает.
+
 ## STT (Whisper / Browser)
 
 - **Default engine:** `whisper` (local). Optional UI: Ещё → `browser` (Edge Web Speech via WebView2).

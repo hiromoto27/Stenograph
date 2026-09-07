@@ -12,8 +12,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install -r requirements-worker.txt -r requirements-ui.txt
-      - run: flet build windows --product "Стенограф" --org stenograph --description "Локальный диктофон: речь -> задачи -> протокол"
+      - run: pip install -r requirements-worker.txt -r requirements-ui.txt flet-cli==0.86.5
+      - run: >
+          flet build windows . --module-name ui.main --yes
+          --product "Стенограф" --org stenograph
+          --description "Локальный диктофон: речь -> задачи -> протокол"
       - uses: actions/upload-artifact@v4
         with:
           name: stenograph-windows

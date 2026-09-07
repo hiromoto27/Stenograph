@@ -1,0 +1,5 @@
+[project]
+name = "stenograph"
+version = "0.1.0"
+description = "Локальный диктофон: речь → протокол → задачи"
+requires-python = ">=3.11"
