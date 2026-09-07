@@ -90,48 +90,14 @@ def main(page: ft.Page) -> None:
     classify_text = ft.Text("", size=14, italic=True, color=TEXT)
     classify_hint = ft.Text("Куда отнести?", size=12, color=MUTED)
     classify_candidates = ft.Column(spacing=6)
+    new_task_field = ft.TextField(label="Новая задача", dense=True, bgcolor=SURFACE2, expand=True)
     classify_panel = ft.Container(
         visible=False,
         bgcolor=SURFACE,
         border=ft.Border.all(1, BORDER),
         border_radius=12,
         padding=12,
-        content=ft.Column(
-            [
-                classify_hint,
-                classify_text,
-                classify_candidates,
-                ft.Row(
-                    [
-                        ft.OutlinedButton("Не относить никуда", on_click=lambda e: classify_skip()),
-                    ]
-                ),
-                ft.Row(
-                    [
-                        ft.TextField(label="Новая задача", dense=True, bgcolor=SURFACE2, expand=True, ref=None),
-                    ]
-                ),
-            ],
-            spacing=8,
-        ),
-    )
-    new_task_field = ft.TextField(label="Новая задача", dense=True, bgcolor=SURFACE2, expand=True)
-    # rebuild panel content with real field
-    classify_panel.content = ft.Column(
-        [
-            classify_hint,
-            classify_text,
-            classify_candidates,
-            ft.Row(
-                [
-                    ft.OutlinedButton("Не относить никуда", on_click=lambda e: classify_skip()),
-                    new_task_field,
-                    ft.FilledButton("+", bgcolor=ACCENT, color=ACCENT_FG, on_click=lambda e: classify_create()),
-                ],
-                wrap=True,
-            ),
-        ],
-        spacing=8,
+        content=ft.Column([classify_hint, classify_text, classify_candidates], spacing=8),
     )
     pending_utterance: dict[str, Any] = {}
     tasks_sidebar: list[dict[str, Any]] = [
@@ -169,6 +135,10 @@ def main(page: ft.Page) -> None:
         tasks_sidebar.append({"task_id": f"local-{len(tasks_sidebar)+1}", "title": title})
         sidebar_new_field.value = ""
         refresh_tasks_sidebar()
+        try:
+            client.send({"event": "task.create", "utterance_id": "", "title": title})
+        except NameError:
+            pass  # client not ready yet at import — only called after start
         set_status(f"Создана задача: {title}")
         page.update()
 
@@ -568,6 +538,34 @@ def main(page: ft.Page) -> None:
         classify_panel.visible = False
         set_status("Не отнесено")
         page.update()
+
+    # Wire classify panel AFTER handlers exist (avoid orphan fields / late binding issues)
+    def _on_new_task_submit(e: ft.ControlEvent) -> None:
+        classify_create()
+
+    new_task_field.on_submit = _on_new_task_submit
+    sidebar_new_field.on_submit = add_sidebar_task
+    classify_panel.content = ft.Column(
+        [
+            classify_hint,
+            classify_text,
+            classify_candidates,
+            ft.Row(
+                [
+                    ft.OutlinedButton("Не относить никуда", on_click=lambda e: classify_skip()),
+                    new_task_field,
+                    ft.FilledButton(
+                        "Создать",
+                        bgcolor=ACCENT,
+                        color=ACCENT_FG,
+                        on_click=lambda e: classify_create(),
+                    ),
+                ],
+                wrap=True,
+            ),
+        ],
+        spacing=8,
+    )
 
     def local_stub_suggest(job_id: str, text_value: str) -> None:
         """Until worker emits task.suggest — keyword stub against sidebar tasks."""
