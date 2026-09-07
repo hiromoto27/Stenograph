@@ -139,7 +139,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Stenograph native worker")
     parser.add_argument("--device", type=int, default=None, help="Input device id")
     parser.add_argument("--list-mics", action="store_true")
-    parser.add_argument("--segment-sec", type=float, default=5.0)
+    parser.add_argument(
+        "--segment-sec",
+        type=float,
+        default=None,
+        help="Max segment length seconds (default 12 / STENOGRAF_MAX_SEG_SEC); pause-based flush",
+    )
+    parser.add_argument(
+        "--pause-sec",
+        type=float,
+        default=None,
+        help="Silence pause to flush segment (default 1.0 / STENOGRAF_PAUSE_SEC, clamped 0.8-1.2)",
+    )
     parser.add_argument(
         "--seconds",
         type=float,
@@ -230,6 +241,7 @@ def main(argv: list[str] | None = None) -> int:
         out_dir=data_root() / "audio_queue",
         device_id=args.device,
         segment_sec=args.segment_sec,
+        pause_sec=args.pause_sec,
     )
 
     if args.list_mics:
@@ -322,6 +334,19 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
 
+    def on_listening(rms: float, buffered_sec: float) -> None:
+        # UI: show «слушаю…» while buffering before pause flush
+        emit(
+            {
+                "event": "asr.listening",
+                "rms": float(rms),
+                "buffered_sec": round(float(buffered_sec), 3),
+            }
+        )
+
+    def on_mic_warn(payload: dict) -> None:
+        emit(payload)
+
     def on_chunk(ev) -> None:
         rms = float(ev.rms or 0.0)
         db = rms_to_db(rms)
@@ -353,8 +378,18 @@ def main(argv: list[str] | None = None) -> int:
 
     capture.on_chunk = on_chunk
     capture.on_level = on_level
+    capture.on_listening = on_listening
+    capture.on_mic_warn = on_mic_warn
     capture.start()
-    emit({"event": "capture.started", "device_id": args.device})
+    emit(
+        {
+            "event": "capture.started",
+            "device_id": args.device,
+            "pause_sec": capture.pause_sec,
+            "max_segment_sec": capture.max_segment_sec,
+            "min_speech_sec": capture.min_speech_sec,
+        }
+    )
 
     tasks = load_tasks()
     emit({"event": "tasks.list", "tasks": [
@@ -388,6 +423,70 @@ def main(argv: list[str] | None = None) -> int:
         nonlocal tasks
         et = cmd.get("event")
         uid = str(cmd.get("utterance_id") or "")
+
+        # Browser / IPC ingest first — do not consume pending_suggest
+        if et == "asr.partial":
+            text_p = str(cmd.get("text") or "")
+            emit(
+                {
+                    "event": "asr.partial",
+                    "utterance_id": uid,
+                    "text": text_p,
+                    "engine": cmd.get("engine") or "browser",
+                    "backend": "browser",
+                }
+            )
+            return
+        if et == "asr.final":
+            uid = uid or f"browser-{int(time.time()*1000)}"
+            text_f = str(cmd.get("text") or "").strip()
+            engine = cmd.get("engine") or "browser"
+            emit(
+                {
+                    "event": "asr.result",
+                    "job_id": uid,
+                    "utterance_id": uid,
+                    "text": text_f,
+                    "confidence": cmd.get("confidence"),
+                    "backend": "browser",
+                    "engine": engine,
+                    "error": None,
+                }
+            )
+            if text_f and len(text_f) >= 2:
+                payload = classify_suggest(text_f, tasks, utterance_id=uid)
+                pending_suggest[uid] = payload
+                emit(payload)
+                if payload.get("auto") and payload.get("candidates"):
+                    top = payload["candidates"][0]
+                    apply_feedback(
+                        tasks,
+                        chosen_id=top["task_id"],
+                        utterance=text_f,
+                        suggested_ids=[c["task_id"] for c in payload["candidates"]],
+                        mode="auto",
+                    )
+                    emit(
+                        {
+                            "event": "task.assigned",
+                            "utterance_id": uid,
+                            "task_id": top["task_id"],
+                            "auto": True,
+                            "score": top["score"],
+                        }
+                    )
+            return
+        if et == "asr.model":
+            emit({"event": "asr.model", "model_id": cmd.get("model_id"), "note": "restart worker to apply"})
+            return
+        if et == "tasks.reload":
+            tasks = load_tasks()
+            emit({"event": "tasks.list", "tasks": [
+                {"task_id": t["task_id"], "title": t["title"], "hits": t.get("hits", 0), "misses": t.get("misses", 0)}
+                for t in tasks
+            ]})
+            return
+
         meta = pending_suggest.pop(uid, {})
         text_u = str(meta.get("text") or cmd.get("text") or "")
         suggested_ids = [c["task_id"] for c in (meta.get("candidates") or [])]
@@ -405,14 +504,6 @@ def main(argv: list[str] | None = None) -> int:
             emit({"event": "task.created", "utterance_id": uid, "task": {"task_id": task["task_id"], "title": task["title"]}})
         elif et == "task.skip":
             emit({"event": "task.skipped", "utterance_id": uid})
-        elif et == "asr.model":
-            emit({"event": "asr.model", "model_id": cmd.get("model_id"), "note": "restart worker to apply"})
-        elif et == "tasks.reload":
-            tasks = load_tasks()
-            emit({"event": "tasks.list", "tasks": [
-                {"task_id": t["task_id"], "title": t["title"], "hits": t.get("hits", 0), "misses": t.get("misses", 0)}
-                for t in tasks
-            ]})
 
     deadline = None if args.seconds <= 0 else time.time() + args.seconds
     try:

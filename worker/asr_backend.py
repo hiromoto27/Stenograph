@@ -134,7 +134,7 @@ class FasterWhisperBackend:
             kwargs["vad_parameters"] = {
                 "threshold": 0.35,
                 "min_silence_duration_ms": 400,
-                "speech_pad_ms": 400,
+                "speech_pad_ms": 300,  # ~300ms pad (softer edges)
                 "min_speech_duration_ms": 100,
             }
         try:

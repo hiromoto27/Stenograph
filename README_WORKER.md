@@ -9,7 +9,7 @@ UI (Flet) is separate — see `README_UI.md`.
 pip install -r requirements-worker.txt
 set PYTHONPATH=.
 python -m worker.main --list-mics
-python -m worker.main --seconds 15 --segment-sec 3
+python -m worker.main --seconds 15 --pause-sec 1.0
 ```
 
 Force backend:
@@ -32,10 +32,24 @@ Env:
 
 - `STENOGRAF_WHISPER_CPP` — path to whisper.cpp CLI
 - `STENOGRAF_WHISPER_MODEL` — explicit ggml model path
+- `STENOGRAF_PAUSE_SEC` — silence pause to flush segment (default 1.0)
+- `STENOGRAF_MAX_SEG_SEC` — max segment length (default 12)
+- `STENOGRAF_VAD` — `0` forces VAD off (default on, pad ~300ms)
 
 ## Events (JSON lines on stdout)
 
-`hw.profile` · `models.list` · `asr.backend` · `mic.list` · `audio.chunk` · `asr.job` · `asr.result` · `capture.started` · `capture.stopped`
+`hw.profile` · `models.list` · `asr.backend` · `mic.list` · `mic.level` · `asr.listening` · `mic.warn` · `audio.chunk` · `asr.job` · `asr.result` · `capture.started` · `capture.stopped`
+
+Browser STT stdin (UI→worker JSON lines):
+
+- `{"event":"asr.partial","utterance_id","text","engine":"browser"}` — echo only, **no** classify
+- `{"event":"asr.final","utterance_id","text","engine":"browser"}` — emits `asr.result` (`backend=browser`) + `task.suggest` (+ auto-assign)
+
+Example `asr.listening` (while buffering; UI «слушаю…»):
+
+```json
+{"event":"asr.listening","rms":0.02,"buffered_sec":1.24}
+```
 
 Example `asr.result`:
 
