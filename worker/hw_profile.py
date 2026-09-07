@@ -19,18 +19,18 @@ class HardwareProfile:
 
 
 def detect_profile() -> HardwareProfile:
-    """Best-effort profile for Windows laptops (Arc) and desktops (NVIDIA)."""
+    """Best-effort profile for Windows desktops (NVIDIA) and Arc laptops."""
     ram_gb = _estimate_ram_gb()
     nvidia = _detect_nvidia()
-    intel_gpu = _guess_intel_gpu()
+    intel_gpu = _detect_intel_gpu()
 
-    if nvidia.get("available") and (ram_gb is None or ram_gb >= 16):
+    # Discrete NVIDIA wins over Intel iGPU (common on gaming desktops).
+    if nvidia.get("available"):
         name = nvidia.get("name") or "NVIDIA"
         vram = nvidia.get("vram_mb")
         reason = f"RAM≈{ram_gb}GB, {name}"
         if vram:
             reason += f", VRAM≈{vram}MB"
-        # 8GB+ VRAM or 24GB+ system RAM → high; else mid with CUDA
         high = (vram is not None and vram >= 8000) or (ram_gb is not None and ram_gb >= 24)
         if high:
             return HardwareProfile(
@@ -50,10 +50,21 @@ def detect_profile() -> HardwareProfile:
             prefer_openvino=False,
         )
 
-    if intel_gpu or (ram_gb is not None and ram_gb >= 12):
+    # High RAM without nvidia-smi: still treat as high CPU, not OpenVINO-mid.
+    if ram_gb is not None and ram_gb >= 24:
+        return HardwareProfile(
+            name="high",
+            reason=f"RAM≈{ram_gb}GB, no nvidia-smi — faster-whisper CPU/CUDA if torch sees GPU",
+            asr_model_hint="faster-whisper small/base",
+            max_asr_workers=1,
+            prefer_cuda=True,  # try CUDA; backend falls back to CPU
+            prefer_openvino=False,
+        )
+
+    if intel_gpu:
         return HardwareProfile(
             name="mid",
-            reason=f"RAM≈{ram_gb}GB, Intel GPU likely — whisper.cpp OpenVINO or faster-whisper CPU",
+            reason=f"RAM≈{ram_gb}GB, Intel GPU — whisper.cpp OpenVINO or faster-whisper CPU",
             asr_model_hint="ggml-base / ggml-small (OpenVINO first)",
             max_asr_workers=1,
             prefer_cuda=False,
@@ -85,10 +96,9 @@ def _estimate_ram_gb() -> float | None:
         return None
 
 
-def _guess_intel_gpu() -> bool:
-    sys = platform.system().lower()
-    # Lightweight heuristic; Arc laptops often Windows + Intel.
-    if sys != "windows":
+def _detect_intel_gpu() -> bool:
+    """True only with positive evidence — never soft-default True."""
+    if platform.system().lower() != "windows":
         return False
     try:
         out = subprocess.check_output(
@@ -96,39 +106,56 @@ def _guess_intel_gpu() -> bool:
             text=True,
             timeout=5,
             stderr=subprocess.DEVNULL,
-        )
-        return "intel" in out.lower() or "arc" in out.lower()
+        ).lower()
+        has_intel = "intel" in out or "arc" in out
+        has_nvidia = "nvidia" in out
+        # If both, caller already preferred NVIDIA via nvidia-smi; here Intel-only.
+        return has_intel and not has_nvidia
     except Exception:
-        return True  # soft default for Windows when WMIC unavailable
+        return False
 
 
 def _detect_nvidia() -> dict:
     """Return {available, name, vram_mb} via nvidia-smi when present."""
-    smi = shutil.which("nvidia-smi")
-    if not smi:
-        return {"available": False}
-    try:
-        out = subprocess.check_output(
-            [
-                smi,
-                "--query-gpu=name,memory.total",
-                "--format=csv,noheader,nounits",
-            ],
-            text=True,
-            timeout=5,
-            stderr=subprocess.DEVNULL,
-        ).strip()
-        if not out:
-            return {"available": False}
-        line = out.splitlines()[0]
-        parts = [p.strip() for p in line.split(",")]
-        name = parts[0] if parts else "NVIDIA"
-        vram_mb = None
-        if len(parts) > 1:
-            try:
-                vram_mb = int(float(parts[1]))
-            except ValueError:
-                vram_mb = None
-        return {"available": True, "name": name, "vram_mb": vram_mb}
-    except Exception:
-        return {"available": False}
+    candidates = []
+    which = shutil.which("nvidia-smi")
+    if which:
+        candidates.append(which)
+    # Common Windows install paths when PATH is incomplete in venv shells.
+    candidates.extend(
+        [
+            r"C:\Windows\System32\nvidia-smi.exe",
+            r"C:\Program Files\NVIDIA Corporation\NVSMI\nvidia-smi.exe",
+        ]
+    )
+    seen: set[str] = set()
+    for smi in candidates:
+        if not smi or smi in seen:
+            continue
+        seen.add(smi)
+        try:
+            out = subprocess.check_output(
+                [
+                    smi,
+                    "--query-gpu=name,memory.total",
+                    "--format=csv,noheader,nounits",
+                ],
+                text=True,
+                timeout=5,
+                stderr=subprocess.DEVNULL,
+            ).strip()
+            if not out:
+                continue
+            line = out.splitlines()[0]
+            parts = [p.strip() for p in line.split(",")]
+            name = parts[0] if parts else "NVIDIA"
+            vram_mb = None
+            if len(parts) > 1:
+                try:
+                    vram_mb = int(float(parts[1]))
+                except ValueError:
+                    vram_mb = None
+            return {"available": True, "name": name, "vram_mb": vram_mb}
+        except Exception:
+            continue
+    return {"available": False}

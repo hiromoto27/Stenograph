@@ -81,3 +81,13 @@ python -m ui.main
 - Долго на stub: норма, текст-заглушка
 - `faster-whisper` тяжёлый: `--backend` + профиль low → tiny
 - UI не видит события: оба пакета из корня репо, `PYTHONPATH=.`
+
+
+## Если профиль mid при 32ГБ + NVIDIA
+
+1. `git pull` — нужен свежий `hw_profile.py`.
+2. В том же терминале: `nvidia-smi` (если «не найдено» — добавь CUDA/Driver в PATH).
+3. Удали устаревший индекс каталога при странном списке из 5 моделей:
+   `del %LOCALAPPDATA%\Stenograf\models\index.json`
+4. HF ReadTimeout: `set HF_HUB_DOWNLOAD_TIMEOUT=300` и повтори, либо качай ggml:
+   `python -m worker.main --download-model whisper-base`

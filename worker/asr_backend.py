@@ -40,14 +40,28 @@ class StubBackend:
 
 
 class FasterWhisperBackend:
-    """CPU/int8 fallback — works without Arc/OpenVINO."""
+    """CPU/int8 or CUDA — downloads CT2 weights from HF on first use."""
 
     name = "faster-whisper"
 
     def __init__(self, model_size: str = "base", device: str = "cpu", compute_type: str = "int8") -> None:
+        import os
+
+        # Slow networks: default HF read timeout is too aggressive for first download.
+        os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "300")
+        os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
+
         from faster_whisper import WhisperModel  # type: ignore
 
-        self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        try:
+            self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(
+                f"faster-whisper failed to load '{model_size}' on {device}/{compute_type}: {exc}. "
+                "Retry with HF_HUB_DOWNLOAD_TIMEOUT=300, or pre-download via huggingface-cli, "
+                "or use --backend stub / whisper.cpp ggml from our catalog "
+                "(python -m worker.main --download-model whisper-base)."
+            ) from exc
         self._model_size = model_size
 
     def transcribe(self, wav_path: Path, language: str = "ru") -> Transcription:
