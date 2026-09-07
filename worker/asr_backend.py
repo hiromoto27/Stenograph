@@ -257,7 +257,8 @@ def select_backend(profile: HardwareProfile) -> AsrBackend:
     if profile.name == "low":
         size = "tiny"
     elif profile.name == "high":
-        size = "small"
+        # small on CPU is very slow for first utterance; keep small only for real CUDA.
+        size = "small" if cuda_runtime_available() else "base"
 
     if getattr(profile, "prefer_cuda", False) and cuda_runtime_available():
         try:
