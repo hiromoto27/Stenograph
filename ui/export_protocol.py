@@ -16,6 +16,9 @@ class ProtocolLine:
     job_id: str = ""
     backend: str = ""
     ts: str = ""
+    meeting_id: str = ""
+    kind: str = "speech"  # decision | risk | blocker | speech — LOGIC.md §7
+    kind_score: float = 0.0
 
     @property
     def anchor(self) -> str:

@@ -79,6 +79,8 @@ def main(page: ft.Page) -> None:
     queue_pending = 0
     queue_done = 0
     meeting_open = False
+    current_meeting_id: str | None = None
+    protocol_by_id: dict[str, ProtocolLine] = {}
     asr_engine = str(load_ui_settings().get("asr_engine") or "whisper")
     listen_label = ft.Text("", size=12, color=MUTED)
     partial_box = ft.Text("", size=13, italic=True, color=MUTED, visible=False)
@@ -90,6 +92,7 @@ def main(page: ft.Page) -> None:
     hw_label = ft.Text("Профиль: —", size=11, color=MUTED)
     backend_label = ft.Text("ASR: —", size=11, color=MUTED)
     status = ft.Text("", size=12, color=MUTED)
+    meeting_label = ft.Text("Встреча не начата", size=12, color=MUTED)
     rec_dot = ft.Container(width=8, height=8, border_radius=4, bgcolor=REC, visible=False)
     rec_label = ft.Text("Идёт запись", size=12, color=REC, visible=False)
     db_label = ft.Text("-60 дБ", size=12, color=MUTED)
@@ -130,6 +133,25 @@ def main(page: ft.Page) -> None:
         border_radius=12,
         padding=12,
         content=ft.Column([classify_hint, classify_text, classify_candidates], spacing=8),
+    )
+
+    def _dismiss_pause_nudge(_: ft.ControlEvent) -> None:
+        pause_nudge.visible = False
+        page.update()
+
+    pause_nudge = ft.Container(
+        visible=False,
+        bgcolor=SURFACE2,
+        border=ft.Border.all(1, WARN),
+        border_radius=12,
+        padding=10,
+        content=ft.Row(
+            [
+                ft.Text("Пауза 8 с — собрать протокол?", size=12, color=TEXT, expand=True),
+                ft.OutlinedButton("Протокол", on_click=lambda e: (do_export("DOCX"), _dismiss_pause_nudge(e))),
+                ft.IconButton(ft.Icons.CLOSE, icon_size=14, icon_color=MUTED, on_click=_dismiss_pause_nudge),
+            ]
+        ),
     )
     pending_utterance: dict[str, Any] = {}
     tasks_sidebar: list[dict[str, Any]] = [
@@ -204,19 +226,53 @@ def main(page: ft.Page) -> None:
         status.value = msg
         page.update()
 
+    KIND_LABEL = {"decision": "Решение", "risk": "Риск", "blocker": "Блокер"}
+    KIND_COLOR = {"decision": OK, "risk": WARN, "blocker": REC}
+
     def append_protocol(prefix: str, text: str, *, job_id: str = "", backend: str = "") -> None:
-        entry = ProtocolLine(text=text, job_id=job_id or prefix, backend=backend)
+        entry = ProtocolLine(text=text, job_id=job_id or prefix, backend=backend, meeting_id=current_meeting_id or "")
         protocol_entries.append(entry)
+        if job_id:
+            protocol_by_id[job_id] = entry
         line = f"[{prefix}] {text}" if prefix else text
-        transcript.controls.append(
-            ft.Container(
-                content=ft.Text(line, selectable=True, size=13, color=TEXT),
-                bgcolor=SURFACE2,
-                padding=10,
-                border_radius=8,
-            )
+        row_id = f"row-{job_id or len(protocol_entries)}"
+        kind_badge = ft.Text("", size=10, visible=False)
+        text_ctl = ft.Text(line, selectable=True, size=13, color=TEXT, expand=True)
+        entry._badge = kind_badge  # type: ignore[attr-defined]
+
+        def _delete_line(_: ft.ControlEvent) -> None:
+            if entry in protocol_entries:
+                protocol_entries.remove(entry)
+            for c in list(transcript.controls):
+                if getattr(c, "data", None) == row_id:
+                    transcript.controls.remove(c)
+            page.update()
+
+        row = ft.Container(
+            data=row_id,
+            content=ft.Row(
+                [kind_badge, text_ctl, ft.IconButton(ft.Icons.CLOSE, icon_size=14, icon_color=MUTED, on_click=_delete_line, tooltip="Удалить строку")],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            bgcolor=SURFACE2,
+            padding=10,
+            border_radius=8,
         )
+        transcript.controls.append(row)
         page.update()
+
+    def apply_kind(job_id: str, kind: str, kind_score: float) -> None:
+        entry = protocol_by_id.get(job_id)
+        if entry is None or kind == "speech":
+            return
+        entry.kind = kind
+        entry.kind_score = kind_score
+        badge = getattr(entry, "_badge", None)
+        if badge is not None:
+            badge.value = KIND_LABEL.get(kind, kind)
+            badge.color = KIND_COLOR.get(kind, MUTED)
+            badge.visible = True
+            page.update()
 
     def refresh_queue() -> None:
         queue_text.value = f"Очередь ASR: pending {queue_pending} · готово {queue_done}"
@@ -325,7 +381,7 @@ def main(page: ft.Page) -> None:
         page.update()
 
     def on_event(event: dict[str, Any]) -> None:
-        nonlocal queue_pending, queue_done, model_rows
+        nonlocal queue_pending, queue_done, model_rows, current_meeting_id
         et = event.get("event")
         if et == "hw.profile":
             nonlocal recommended_model_id
@@ -434,6 +490,7 @@ def main(page: ft.Page) -> None:
             uid = str(event.get("utterance_id") or event.get("job_id") or "")
             text_value = str(event.get("text") or "")
             cands = event.get("candidates") or []
+            apply_kind(uid, str(event.get("kind") or "speech"), float(event.get("kind_score") or 0.0))
             if event.get("auto") and cands:
                 set_status(f"Авто → {cands[0].get('title')} ({cands[0].get('score')})")
             elif event.get("intent") and event["intent"].get("type") == "create_task":
@@ -458,6 +515,23 @@ def main(page: ft.Page) -> None:
                 tasks_sidebar.append({"task_id": task.get("task_id"), "title": task.get("title")})
                 refresh_tasks_sidebar()
             set_status(f"Задача создана: {task.get('title')}")
+            page.update()
+        elif et == "meeting.start":
+            current_meeting_id = event.get("meeting_id")
+            meeting_label.value = f"Встреча «{event.get('title') or 'без темы'}» идёт"
+            meeting_label.color = OK
+            meeting_btn.text = "Завершить встречу"
+            pause_nudge.visible = False
+            page.update()
+        elif et == "meeting.end":
+            current_meeting_id = None
+            meeting_label.value = "Встреча не начата"
+            meeting_label.color = MUTED
+            meeting_btn.text = "Начать встречу"
+            pause_nudge.visible = False
+            page.update()
+        elif et == "meeting.pause_suggest":
+            pause_nudge.visible = True
             page.update()
         elif et == "models.list":
             models = event.get("models") or []
@@ -736,6 +810,28 @@ def main(page: ft.Page) -> None:
         set_status("Остановлено")
         page.update()
 
+    def start_meeting(e: ft.ControlEvent) -> None:
+        title = (topic_field.value or "").strip()
+        if not client.running:
+            start_rec(e)
+        client.send({"event": "meeting.start", "title": title})
+
+    def end_meeting(_: ft.ControlEvent) -> None:
+        client.send({"event": "meeting.end"})
+
+    def toggle_meeting(e: ft.ControlEvent) -> None:
+        if current_meeting_id:
+            end_meeting(e)
+        else:
+            start_meeting(e)
+
+    meeting_btn = ft.FilledButton(
+        "Начать встречу",
+        bgcolor=ACCENT,
+        color=ACCENT_FG,
+        on_click=toggle_meeting,
+    )
+
     def do_export(kind: str) -> None:
         if not protocol_entries:
             set_status("Протокол пуст")
@@ -822,19 +918,9 @@ def main(page: ft.Page) -> None:
                             border_radius=16,
                             padding=16,
                         ),
-                        ft.Row(
-                            [
-                                topic_field,
-                                ft.FilledButton(
-                                    "Начать встречу",
-                                    bgcolor=ACCENT,
-                                    color=ACCENT_FG,
-                                    on_click=lambda e: set_status(
-                                        f"Встреча: {topic_field.value or 'без темы'}"
-                                    ),
-                                ),
-                            ]
-                        ),
+                        ft.Row([topic_field, meeting_btn]),
+                        meeting_label,
+                        pause_nudge,
                         ft.Row(
                             [
                                 mic_dd,

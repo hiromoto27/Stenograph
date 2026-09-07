@@ -14,6 +14,7 @@ from worker.asr_queue import AsrJob, AsrQueue, AsrResult
 from worker.capture import CaptureSession, db_to_level, rms_to_db
 from worker.hw_profile import detect_profile
 from worker.classifier import apply_feedback, suggest as classify_suggest
+from worker.meetings import MeetingTracker
 from worker.tasks_store import create_task, load_tasks, save_tasks
 from worker.models_catalog import (
     download_with_resume,
@@ -412,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     ]})
 
     pending_suggest: dict[str, dict] = {}
+    meetings = MeetingTracker()
     import threading
     import queue as queue_mod
     cmd_q: queue_mod.Queue = queue_mod.Queue()
@@ -468,7 +470,9 @@ def main(argv: list[str] | None = None) -> int:
                 }
             )
             if text_f and len(text_f) >= 2:
+                meetings.note_utterance(uid)
                 payload = classify_suggest(text_f, tasks, utterance_id=uid)
+                payload["meeting_id"] = meetings.meeting_id
                 pending_suggest[uid] = payload
                 emit(payload)
                 if payload.get("auto") and payload.get("candidates"):
@@ -500,6 +504,14 @@ def main(argv: list[str] | None = None) -> int:
                 for t in tasks
             ]})
             return
+        if et == "meeting.start":
+            meeting = meetings.start(str(cmd.get("title") or ""))
+            emit({"event": "meeting.start", **meeting.to_dict()})
+            return
+        if et == "meeting.end":
+            meeting = meetings.end()
+            emit({"event": "meeting.end", **(meeting.to_dict() if meeting else {"meeting_id": None})})
+            return
 
         meta = pending_suggest.pop(uid, {})
         text_u = str(meta.get("text") or cmd.get("text") or "")
@@ -527,6 +539,8 @@ def main(argv: list[str] | None = None) -> int:
                     _handle_cmd(cmd_q.get_nowait())
                 except queue_mod.Empty:
                     break
+            if meetings.check_pause():
+                emit({"event": "meeting.pause_suggest", "meeting_id": meetings.meeting_id, "pause_sec": meetings.pause_sec})
             result = asr.poll_result(timeout=0.5)
             if result:
                 emit(
@@ -541,7 +555,9 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 text = (result.text or "").strip()
                 if text and len(text) >= 2 and not result.error:
+                    meetings.note_utterance(str(result.job_id))
                     payload = classify_suggest(text, tasks, utterance_id=str(result.job_id))
+                    payload["meeting_id"] = meetings.meeting_id
                     pending_suggest[str(result.job_id)] = payload
                     emit(payload)
                     # Intent create_task: still suggest UI create with title
