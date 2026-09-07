@@ -132,10 +132,17 @@ class FasterWhisperBackend:
         # Light VAD: shorter silence cut + pad (faster-whisper VadOptions)
         if vad_filter:
             kwargs["vad_parameters"] = {
-                "min_silence_duration_ms": 500,
-                "speech_pad_ms": 200,
+                "threshold": 0.35,
+                "min_silence_duration_ms": 400,
+                "speech_pad_ms": 400,
+                "min_speech_duration_ms": 100,
             }
-        return self._model.transcribe(str(wav_path), **kwargs)
+        try:
+            return self._model.transcribe(str(wav_path), **kwargs)
+        except TypeError:
+            # older faster-whisper without vad_parameters
+            kwargs.pop("vad_parameters", None)
+            return self._model.transcribe(str(wav_path), **kwargs)
 
     def transcribe(self, wav_path: Path, language: str = "ru") -> Transcription:
         import os

@@ -325,12 +325,13 @@ def main(argv: list[str] | None = None) -> int:
     def on_chunk(ev) -> None:
         rms = float(ev.rms or 0.0)
         db = rms_to_db(rms)
-        # LOGIC.md §13 — не звать на тишине: write WAV but skip ASR if energy gate fails
+        # LOGIC.md §13 — тишину режем только если явно задан порог.
+        # Default 0: gate OFF (0.005 глотал тихий mic при живом VU из-за boost в UI).
         try:
-            rms_gate = float(os.environ.get("STENOGRAF_ASR_RMS_MIN", "0.005"))
+            rms_gate = float(os.environ.get("STENOGRAF_ASR_RMS_MIN", "0"))
         except ValueError:
-            rms_gate = 0.005
-        skip_asr = rms < rms_gate
+            rms_gate = 0.0
+        skip_asr = bool(rms_gate > 0 and rms < rms_gate)
         emit(
             {
                 "event": "audio.chunk",
@@ -341,9 +342,11 @@ def main(argv: list[str] | None = None) -> int:
                 "level": db_to_level(db),
                 "started_at": ev.started_at,
                 "skipped_asr": skip_asr,
+                "rms_gate": rms_gate,
             }
         )
         if skip_asr:
+            emit({"event": "asr.skip", "reason": "rms_gate", "rms": rms, "rms_gate": rms_gate, "path": str(ev.path)})
             return
         job = asr.enqueue(ev.path, language="ru")
         emit({"event": "asr.job", "id": job.id, "pending": asr.pending()})
