@@ -457,14 +457,14 @@ def main(page: ft.Page) -> None:
                 ),
                 ft.Container(
                     content=models_view,
-                    border=ft.border.all(1, ft.Colors.OUTLINE),
+                    border=ft.Border.all(1, ft.Colors.OUTLINE),
                     border_radius=8,
                     padding=8,
                 ),
                 ft.Text("Протокол", size=16, weight=ft.FontWeight.W_600),
                 ft.Container(
                     content=protocol_view,
-                    border=ft.border.all(1, ft.Colors.OUTLINE),
+                    border=ft.Border.all(1, ft.Colors.OUTLINE),
                     border_radius=8,
                     padding=8,
                     expand=True,
