@@ -25,3 +25,8 @@ python -m ui.main
 - `ui/mvp_legacy.py` — previous flat MVP (optional)
 
 Classifier / task graph — later with worker Dev.
+
+## «Куда отнести?»
+
+Listens for `task.suggest`; until worker emits it, UI uses a keyword stub after `asr.result`.
+User actions send `task.assign` / `task.create` / `task.skip` on worker stdin.

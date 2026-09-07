@@ -1,4 +1,4 @@
-"""Spawn worker and parse JSON-line events from stdout."""
+"""Spawn worker and parse JSON-line events from stdout; optional stdin commands."""
 from __future__ import annotations
 
 import json
@@ -10,12 +10,11 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-
 EventHandler = Callable[[dict[str, Any]], None]
 
 
 class WorkerClient:
-    """Interim IPC: worker emits JSON lines on stdout."""
+    """Interim IPC: worker emits JSON lines on stdout; UI may send JSON on stdin."""
 
     def __init__(
         self,
@@ -31,9 +30,6 @@ class WorkerClient:
     @property
     def running(self) -> bool:
         return self._proc is not None and self._proc.poll() is None
-
-    def list_mics_cmd(self) -> list[str]:
-        return [sys.executable, "-m", "worker.main", "--list-mics"]
 
     def start(
         self,
@@ -58,11 +54,23 @@ class WorkerClient:
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            stdin=subprocess.PIPE,
             text=True,
             bufsize=1,
         )
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
+
+    def send(self, event: dict[str, Any]) -> None:
+        """Send a JSON command to worker stdin (task.assign / create / skip / …)."""
+        if not self._proc or not self._proc.stdin or self._proc.poll() is not None:
+            return
+        line = json.dumps(event, ensure_ascii=True) + "\n"
+        try:
+            self._proc.stdin.write(line)
+            self._proc.stdin.flush()
+        except OSError:
+            pass
 
     def stop(self) -> None:
         self._stop.set()

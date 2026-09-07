@@ -50,6 +50,61 @@ def main(page: ft.Page) -> None:
     models_view = ft.ListView(expand=True, spacing=4)
     download_progress = ft.ProgressBar(value=0, visible=False, color=ACCENT, bgcolor=BORDER)
 
+    # --- «Куда отнести?» ---
+    classify_text = ft.Text("", size=14, italic=True, color=TEXT)
+    classify_hint = ft.Text("Куда отнести?", size=12, color=MUTED)
+    classify_candidates = ft.Column(spacing=6)
+    classify_panel = ft.Container(
+        visible=False,
+        bgcolor=SURFACE,
+        border=ft.Border.all(1, BORDER),
+        border_radius=12,
+        padding=12,
+        content=ft.Column(
+            [
+                classify_hint,
+                classify_text,
+                classify_candidates,
+                ft.Row(
+                    [
+                        ft.OutlinedButton("Не относить никуда", on_click=lambda e: classify_skip()),
+                    ]
+                ),
+                ft.Row(
+                    [
+                        ft.TextField(label="Новая задача", dense=True, bgcolor=SURFACE2, expand=True, ref=None),
+                    ]
+                ),
+            ],
+            spacing=8,
+        ),
+    )
+    new_task_field = ft.TextField(label="Новая задача", dense=True, bgcolor=SURFACE2, expand=True)
+    # rebuild panel content with real field
+    classify_panel.content = ft.Column(
+        [
+            classify_hint,
+            classify_text,
+            classify_candidates,
+            ft.Row(
+                [
+                    ft.OutlinedButton("Не относить никуда", on_click=lambda e: classify_skip()),
+                    new_task_field,
+                    ft.FilledButton("+", bgcolor=ACCENT, color=ACCENT_FG, on_click=lambda e: classify_create()),
+                ],
+                wrap=True,
+            ),
+        ],
+        spacing=8,
+    )
+    pending_utterance: dict[str, Any] = {}
+    tasks_sidebar: list[dict[str, Any]] = [
+        {"task_id": "t-kitchen", "title": "Ремонт кухни"},
+        {"task_id": "t-buy", "title": "Закупка материалов"},
+        {"task_id": "t-report", "title": "Отчёт руководству"},
+    ]
+
+
     mic_dd = ft.Dropdown(label="Микрофон", options=[], width=320, dense=True, bgcolor=SURFACE2)
     topic_field = ft.TextField(
         label="Тема встречи",
@@ -245,6 +300,8 @@ def main(page: ft.Page) -> None:
                 if conf is not None:
                     prefix = f"{prefix} · conf={conf}" if prefix else f"conf={conf}"
                 append_protocol(prefix, text, job_id=job_id, backend=str(backend))
+                # Prefer worker task.suggest; until then keyword stub for UI wiring
+                local_stub_suggest(job_id, text)
         elif et == "models.list":
             models = event.get("models") or []
             if models:
@@ -273,6 +330,110 @@ def main(page: ft.Page) -> None:
         page.update()
 
     client = WorkerClient(worker_cwd=repo_root, on_event=on_event)
+
+    def show_suggest(utterance_id: str, text_value: str, candidates: list[dict[str, Any]]) -> None:
+        pending_utterance.clear()
+        pending_utterance.update({"utterance_id": utterance_id, "text": text_value})
+        classify_text.value = f"«{text_value}»"
+        classify_candidates.controls.clear()
+        for c in candidates:
+            score = float(c.get("score") or 0)
+            title = str(c.get("title") or c.get("task_id") or "?")
+            tid = str(c.get("task_id") or "")
+            pct = int(round(score * 100))
+            fill = max(0.08, min(1.0, score))
+
+            def make_assign(task_id: str):
+                def _(_: ft.ControlEvent) -> None:
+                    classify_assign(task_id)
+                return _
+
+            bar = ft.Stack(
+                [
+                    ft.Container(bgcolor=BORDER, border_radius=8, height=36, expand=True),
+                    ft.Container(
+                        bgcolor="#3f3f46",
+                        border_radius=8,
+                        height=36,
+                        width=None,
+                        # approximate fill via opacity row
+                    ),
+                    ft.Container(
+                        content=ft.Text(f"{title} — {pct}%", size=13, color=TEXT),
+                        alignment=ft.Alignment.CENTER,
+                        height=36,
+                        expand=True,
+                    ),
+                ],
+                height=36,
+                expand=True,
+            )
+            # Simpler clickable row with progress
+            classify_candidates.controls.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.ProgressBar(value=fill, width=120, color=ACCENT, bgcolor=BORDER),
+                            ft.Text(f"{title} — {pct}%", size=13, color=TEXT, expand=True),
+                        ]
+                    ),
+                    bgcolor=SURFACE2,
+                    padding=8,
+                    border_radius=8,
+                    on_click=make_assign(tid),
+                )
+            )
+        classify_panel.visible = True
+        page.update()
+
+    def classify_assign(task_id: str) -> None:
+        uid = pending_utterance.get("utterance_id") or ""
+        client.send({"event": "task.assign", "utterance_id": uid, "task_id": task_id})
+        classify_panel.visible = False
+        set_status(f"Отнесено → {task_id}")
+        page.update()
+
+    def classify_create() -> None:
+        title = (new_task_field.value or "").strip()
+        if not title:
+            set_status("Введите название новой задачи")
+            return
+        uid = pending_utterance.get("utterance_id") or ""
+        client.send({"event": "task.create", "utterance_id": uid, "title": title})
+        tasks_sidebar.append({"task_id": f"local-{len(tasks_sidebar)+1}", "title": title})
+        new_task_field.value = ""
+        classify_panel.visible = False
+        set_status(f"Создана задача: {title}")
+        page.update()
+
+    def classify_skip() -> None:
+        uid = pending_utterance.get("utterance_id") or ""
+        client.send({"event": "task.skip", "utterance_id": uid})
+        classify_panel.visible = False
+        set_status("Не отнесено")
+        page.update()
+
+    def local_stub_suggest(job_id: str, text_value: str) -> None:
+        """Until worker emits task.suggest — keyword stub against sidebar tasks."""
+        low = text_value.lower()
+        scored = []
+        for t in tasks_sidebar:
+            title = t["title"].lower()
+            words = [w for w in title.replace("ё", "е").split() if len(w) > 3]
+            hits = sum(1 for w in words if w in low.replace("ё", "е"))
+            score = 0.15 + 0.25 * hits
+            if "кухн" in low and "кухн" in title:
+                score = max(score, 0.49)
+            if "отчёт" in low or "отчет" in low:
+                if "отчёт" in title or "отчет" in title:
+                    score = max(score, 0.36)
+            if "напомн" in low:
+                score = max(score, 0.2)
+            scored.append({"task_id": t["task_id"], "title": t["title"], "score": min(0.95, score)})
+        scored.sort(key=lambda x: -x["score"])
+        show_suggest(job_id, text_value, scored[:4])
+
+
 
     def refresh_mics(_: ft.ControlEvent | None = None) -> None:
         if not (repo_root / "worker" / "main.py").exists():
@@ -426,6 +587,7 @@ def main(page: ft.Page) -> None:
                         queue_text,
                         download_progress,
                         status,
+                        classify_panel,
                         transcript_box,
                     ],
                     expand=True,
@@ -442,7 +604,21 @@ def main(page: ft.Page) -> None:
                             ft.Text("Задачи", size=18, weight=ft.FontWeight.W_600, color=TEXT),
                             ft.Text("Профили ключевых слов — следующий слой", size=11, color=MUTED),
                             ft.TextField(label="Новая задача", bgcolor=SURFACE2, dense=True),
-                            ft.Text("Пока заглушка сайдбара", size=12, color=MUTED),
+                            *[
+                                ft.Container(
+                                    content=ft.Column(
+                                        [
+                                            ft.Text(t["title"], size=13, color=TEXT),
+                                            ft.Text("0 реплик · Новичок", size=11, color=MUTED),
+                                        ],
+                                        spacing=2,
+                                    ),
+                                    bgcolor=SURFACE2,
+                                    padding=10,
+                                    border_radius=8,
+                                )
+                                for t in tasks_sidebar
+                            ],
                         ],
                         spacing=10,
                     ),
