@@ -15,35 +15,60 @@ AMBIGUOUS_TIGHT = 0.1
 
 
 def _task_pos_bag(task: dict[str, Any]) -> Counter[str]:
-    parts = [task.get("title") or ""] + list(task.get("positive") or [])
-    toks: list[str] = []
-    for p in parts:
-        toks.extend(tokenize(str(p)))
-    # also raw positive stems already stored
-    for p in task.get("positive") or []:
-        s = str(p).lower().replace("ё", "е")
+    """Title bag + weighted positive profile (LOGIC.md §6 dict[str,float])."""
+    c: Counter[str] = bag(tokenize(str(task.get("title") or "")))
+    pos = task.get("positive") or {}
+    if isinstance(pos, list):
+        from worker.tasks_store import as_weight_dict
+
+        pos = as_weight_dict(pos)
+    for tok, w in dict(pos).items():
+        try:
+            weight = float(w)
+        except (TypeError, ValueError):
+            weight = 1.0
+        s = str(tok).lower().replace("ё", "е")
         if len(s) >= 3:
-            toks.append(s)
-    return bag(toks)
+            c[s] += weight
+    return c
 
 
 def _task_neg_bag(task: dict[str, Any]) -> Counter[str]:
-    toks: list[str] = []
-    for p in task.get("negative") or []:
-        toks.extend(tokenize(str(p)))
-        s = str(p).lower().replace("ё", "е")
+    """Weighted negative profile (LOGIC.md §6 dict[str,float])."""
+    c: Counter[str] = Counter()
+    neg = task.get("negative") or {}
+    if isinstance(neg, list):
+        from worker.tasks_store import as_weight_dict
+
+        neg = as_weight_dict(neg)
+    for tok, w in dict(neg).items():
+        try:
+            weight = float(w)
+        except (TypeError, ValueError):
+            weight = 1.0
+        s = str(tok).lower().replace("ё", "е")
         if len(s) >= 3:
-            toks.append(s)
-    return bag(toks)
+            c[s] += weight
+    return c
 
 
 def _embed_bag(task: dict[str, Any]) -> Counter[str]:
     """Bag-of-words stand-in until Chroma (LOGIC.md §4 — keep bag)."""
-    parts = [task.get("title") or "", task.get("notes") or ""] + list(task.get("positive") or [])
-    toks: list[str] = []
-    for p in parts:
-        toks.extend(tokenize(str(p)))
-    return bag(toks)
+    c: Counter[str] = bag(tokenize(f"{task.get('title') or ''} {task.get('notes') or ''}"))
+    pos = task.get("positive") or {}
+    if isinstance(pos, list):
+        from worker.tasks_store import as_weight_dict
+
+        pos = as_weight_dict(pos)
+    for tok, w in dict(pos).items():
+        try:
+            weight = float(w)
+        except (TypeError, ValueError):
+            weight = 1.0
+        s = str(tok).lower().replace("ё", "е")
+        if len(s) >= 3:
+            c[s] += weight
+    return c
 
 
 def rank_tasks(text: str, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -116,21 +141,18 @@ def apply_feedback(
     suggested_ids: list[str],
     mode: str,
 ) -> None:
-    """LOGIC.md §6 — mutate tasks in place."""
-    from worker.tasks_store import save_tasks
+    """LOGIC.md §6 — mutate tasks in place (weighted positive/negative profiles)."""
+    from worker.tasks_store import as_weight_dict, save_tasks
 
     toks = tokenize(utterance)
     by_id = {t["task_id"]: t for t in tasks}
     chosen = by_id.get(chosen_id) if chosen_id else None
     if chosen is not None:
+        pos = as_weight_dict(chosen.get("positive"))
+        chosen["positive"] = pos
+        boost = 1.25 if mode == "auto" else 1.0
         for tok in toks:
-            # +1.25 on auto path; still + on clarify
-            boost = 1.25 if mode == "auto" else 1.0
-            # store as repeated weight via float-ish: keep list and append token
-            for _ in range(1 if boost <= 1 else 1):
-                chosen.setdefault("positive", []).append(tok)
-            if boost > 1:
-                chosen["positive"].append(tok)  # ~2x ≈ 1.25-ish bag weight
+            pos[tok] = float(pos.get(tok) or 0.0) + boost
         if mode == "auto" or (suggested_ids and chosen_id == suggested_ids[0]):
             chosen["hits"] = int(chosen.get("hits") or 0) + 1
         elif suggested_ids and chosen_id not in suggested_ids[:1]:
@@ -138,7 +160,7 @@ def apply_feedback(
             top = by_id.get(suggested_ids[0])
             if top is not None:
                 top["misses"] = int(top.get("misses") or 0) + 1
-        # neighbors get mild negative
+        # ask: other candidates get negative; links between chosen and neighbors
         if mode == "ask":
             for sid in suggested_ids:
                 if sid == chosen_id:
@@ -146,9 +168,10 @@ def apply_feedback(
                 other = by_id.get(sid)
                 if other is None:
                     continue
-                for tok in toks[:6]:
-                    other.setdefault("negative", []).append(tok)
-                # link chosen ↔ neighbors
+                neg = as_weight_dict(other.get("negative"))
+                other["negative"] = neg
+                for tok in toks:
+                    neg[tok] = float(neg.get(tok) or 0.0) + 1.0
                 if chosen_id not in other.setdefault("links", []):
                     other["links"].append(chosen_id)
                 if sid not in chosen.setdefault("links", []):

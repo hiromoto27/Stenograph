@@ -20,49 +20,105 @@ def tasks_path() -> Path:
     return data_root() / "tasks.json"
 
 
+def as_weight_dict(raw: Any) -> dict[str, float]:
+    """Normalize positive/negative to dict[str,float]. list→dict: each token count 1.0."""
+    if isinstance(raw, dict):
+        out: dict[str, float] = {}
+        for k, v in raw.items():
+            try:
+                out[str(k)] = float(v)
+            except (TypeError, ValueError):
+                continue
+        return out
+    if isinstance(raw, list):
+        out = {}
+        for item in raw:
+            s = str(item)
+            out[s] = out.get(s, 0.0) + 1.0
+        return out
+    return {}
+
+
 DEFAULT_TASKS: list[dict[str, Any]] = [
-    {"task_id": "t-kitchen", "title": "Ремонт кухни", "notes": "", "positive": ["кухн", "ремонт"], "negative": [], "hits": 0, "misses": 0, "links": []},
-    {"task_id": "t-buy", "title": "Закупка материалов", "notes": "", "positive": ["закуп", "материал"], "negative": [], "hits": 0, "misses": 0, "links": []},
-    {"task_id": "t-report", "title": "Отчёт руководству", "notes": "", "positive": ["отчет", "отчёт", "руковод"], "negative": [], "hits": 0, "misses": 0, "links": []},
+    {
+        "task_id": "t-kitchen",
+        "title": "Ремонт кухни",
+        "notes": "",
+        "positive": {"кухн": 1.0, "ремонт": 1.0},
+        "negative": {},
+        "hits": 0,
+        "misses": 0,
+        "links": [],
+    },
+    {
+        "task_id": "t-buy",
+        "title": "Закупка материалов",
+        "notes": "",
+        "positive": {"закуп": 1.0, "материал": 1.0},
+        "negative": {},
+        "hits": 0,
+        "misses": 0,
+        "links": [],
+    },
+    {
+        "task_id": "t-report",
+        "title": "Отчёт руководству",
+        "notes": "",
+        "positive": {"отчет": 1.0, "отчёт": 1.0, "руковод": 1.0},
+        "negative": {},
+        "hits": 0,
+        "misses": 0,
+        "links": [],
+    },
 ]
+
+
+def _normalize_task(t: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "task_id": str(t["task_id"]),
+        "title": str(t.get("title") or t["task_id"]),
+        "notes": str(t.get("notes") or ""),
+        "positive": as_weight_dict(t.get("positive")),
+        "negative": as_weight_dict(t.get("negative")),
+        "hits": int(t.get("hits") or 0),
+        "misses": int(t.get("misses") or 0),
+        "links": list(t.get("links") or []),
+        "remind_at": t.get("remind_at"),
+    }
 
 
 def load_tasks() -> list[dict[str, Any]]:
     path = tasks_path()
     if not path.exists():
-        save_tasks(DEFAULT_TASKS)
-        return [dict(t) for t in DEFAULT_TASKS]
+        save_tasks([dict(t) for t in DEFAULT_TASKS])
+        return [_normalize_task(t) for t in DEFAULT_TASKS]
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         tasks = data.get("tasks") if isinstance(data, dict) else data
         if not isinstance(tasks, list) or not tasks:
-            return [dict(t) for t in DEFAULT_TASKS]
+            return [_normalize_task(t) for t in DEFAULT_TASKS]
         out = []
         for t in tasks:
             if not isinstance(t, dict) or not t.get("task_id"):
                 continue
-            out.append(
-                {
-                    "task_id": str(t["task_id"]),
-                    "title": str(t.get("title") or t["task_id"]),
-                    "notes": str(t.get("notes") or ""),
-                    "positive": list(t.get("positive") or []),
-                    "negative": list(t.get("negative") or []),
-                    "hits": int(t.get("hits") or 0),
-                    "misses": int(t.get("misses") or 0),
-                    "links": list(t.get("links") or []),
-                    "remind_at": t.get("remind_at"),
-                }
-            )
-        return out or [dict(t) for t in DEFAULT_TASKS]
+            out.append(_normalize_task(t))
+        return out or [_normalize_task(t) for t in DEFAULT_TASKS]
     except Exception:
-        return [dict(t) for t in DEFAULT_TASKS]
+        return [_normalize_task(t) for t in DEFAULT_TASKS]
 
 
 def save_tasks(tasks: list[dict[str, Any]]) -> None:
     path = tasks_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"tasks": tasks}, ensure_ascii=False, indent=2), encoding="utf-8")
+    normalized = []
+    for t in tasks:
+        if not isinstance(t, dict) or not t.get("task_id"):
+            continue
+        row = dict(t)
+        row["positive"] = as_weight_dict(row.get("positive"))
+        row["negative"] = as_weight_dict(row.get("negative"))
+        normalized.append(row)
+    path.write_text(json.dumps({"tasks": normalized}, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def create_task(tasks: list[dict[str, Any]], title: str) -> dict[str, Any]:
@@ -71,8 +127,8 @@ def create_task(tasks: list[dict[str, Any]], title: str) -> dict[str, Any]:
         "task_id": tid,
         "title": title.strip() or "Новая задача",
         "notes": "",
-        "positive": [],
-        "negative": [],
+        "positive": {},
+        "negative": {},
         "hits": 0,
         "misses": 0,
         "links": [],

@@ -122,21 +122,29 @@ class FasterWhisperBackend:
             )
 
     def _transcribe_once(self, wav_path: Path, language: str, *, vad_filter: bool):
-        return self._model.transcribe(
-            str(wav_path),
+        kwargs = dict(
             language=language,
             vad_filter=vad_filter,
             beam_size=5,
             best_of=5,
             condition_on_previous_text=False,
         )
+        # Light VAD: shorter silence cut + pad (faster-whisper VadOptions)
+        if vad_filter:
+            kwargs["vad_parameters"] = {
+                "min_silence_duration_ms": 500,
+                "speech_pad_ms": 200,
+            }
+        return self._model.transcribe(str(wav_path), **kwargs)
 
     def transcribe(self, wav_path: Path, language: str = "ru") -> Transcription:
         import os
 
         t0 = time.time()
-        # VAD often drops quiet RU speech on short segments → empty text. Off by default.
-        use_vad = os.environ.get("STENOGRAF_VAD", "").strip().lower() in {"1", "true", "yes"}
+        # LOGIC.md §13: VAD on by default; STENOGRAF_VAD=0 forces off.
+        # Empty after VAD → retry once without (quiet RU short segments).
+        vad_env = os.environ.get("STENOGRAF_VAD", "1").strip().lower()
+        use_vad = vad_env not in {"0", "false", "no", "off"}
         try:
             segments, info = self._transcribe_once(wav_path, language, vad_filter=use_vad)
         except Exception as exc:  # noqa: BLE001
