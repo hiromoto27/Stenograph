@@ -116,6 +116,11 @@ def main(page: ft.Page) -> None:
 
 
     mic_dd = ft.Dropdown(label="Микрофон", options=[], width=320, dense=True, bgcolor=SURFACE2)
+    model_dd = ft.Dropdown(label="Модель ASR", options=[], width=360, dense=True, bgcolor=SURFACE2)
+    model_rec_label = ft.Text("Рекомендация: —", size=11, color=MUTED)
+    selected_model_id: str | None = None
+    recommended_model_id: str | None = None
+
     topic_field = ft.TextField(
         label="Тема встречи",
         hint_text="Тема встречи",
@@ -173,6 +178,7 @@ def main(page: ft.Page) -> None:
                     }
                 )
             render_models()
+            refresh_model_dropdown()
         except Exception as exc:  # noqa: BLE001
             set_status(f"Каталог: {exc}")
 
@@ -254,12 +260,29 @@ def main(page: ft.Page) -> None:
         nonlocal queue_pending, queue_done, model_rows
         et = event.get("event")
         if et == "hw.profile":
+            nonlocal recommended_model_id
             prof = event.get("profile") or {}
             if isinstance(prof, dict):
                 name = prof.get("name") or "?"
                 hint = prof.get("asr_model_hint") or ""
                 reason = prof.get("reason") or ""
                 hw_label.value = f"Профиль: {name}" + (f" · {hint}" if hint else "") + (f" · {reason}" if reason else "")
+                # Map profile → recommended catalog id
+                n = str(name).lower()
+                force_cpu = (os.environ.get("STENOGRAF_FORCE_CPU") or "").strip() in {"1", "true", "yes"}
+                if force_cpu or n == "low":
+                    recommended_model_id = "fw-base" if any(r.get("id") == "fw-base" for r in model_rows) else "whisper-base"
+                elif n == "high":
+                    recommended_model_id = "fw-small" if any(r.get("id") == "fw-small" for r in model_rows) else "whisper-small"
+                else:
+                    recommended_model_id = "whisper-base"
+                # Prefer explicit recommend from worker if present
+                if event.get("recommend_model_id"):
+                    recommended_model_id = str(event.get("recommend_model_id"))
+                elif prof.get("recommend_model_id"):
+                    recommended_model_id = str(prof.get("recommend_model_id"))
+                model_rec_label.value = f"Рекомендация: {recommended_model_id} ({name})"
+                refresh_model_dropdown()
             else:
                 hw_label.value = f"Профиль: {prof}"
         elif et == "mic.list":
@@ -351,6 +374,41 @@ def main(page: ft.Page) -> None:
         page.update()
 
     client = WorkerClient(worker_cwd=repo_root, on_event=on_event)
+
+    def refresh_model_dropdown() -> None:
+        nonlocal selected_model_id
+        # Prefer downloadable / local engines for explicit pick; include faster-whisper ids
+        opts = []
+        for row in model_rows:
+            mid = str(row.get("id") or "")
+            if not mid:
+                continue
+            eng = str(row.get("engine") or "")
+            mark = ""
+            if mid == recommended_model_id:
+                mark = " ★ рек."
+            local = row.get("local_present")
+            loc = " ✓" if local is True else ("" if local is None else "")
+            label = f"{mid} [{eng}]{loc}{mark}"
+            opts.append(ft.dropdown.Option(key=mid, text=label))
+        model_dd.options = opts
+        if recommended_model_id and any(o.key == recommended_model_id for o in opts):
+            model_dd.value = recommended_model_id
+            selected_model_id = recommended_model_id
+        elif opts and not model_dd.value:
+            model_dd.value = opts[0].key
+            selected_model_id = opts[0].key
+        page.update()
+
+    def on_model_pick(e: ft.ControlEvent) -> None:
+        nonlocal selected_model_id
+        selected_model_id = model_dd.value
+        client.send({"event": "asr.model", "model_id": selected_model_id})
+        set_status(f"Модель: {selected_model_id}")
+
+    model_dd.on_change = on_model_pick
+
+
 
     def show_suggest(utterance_id: str, text_value: str, candidates: list[dict[str, Any]]) -> None:
         pending_utterance.clear()
@@ -485,8 +543,9 @@ def main(page: ft.Page) -> None:
     def start_rec(_: ft.ControlEvent) -> None:
         nonlocal meeting_open
         meeting_open = True
-        set_status("Запись…")
-        client.start(mic_id=mic_dd.value, segment_sec=3.0)
+        mid = model_dd.value or selected_model_id
+        set_status(f"Запись… модель={mid or 'auto'}")
+        client.start(mic_id=mic_dd.value, segment_sec=3.0, model_id=mid)
 
     def stop_rec(_: ft.ControlEvent) -> None:
         client.stop()
@@ -595,6 +654,13 @@ def main(page: ft.Page) -> None:
                                 mic_dd,
                                 ft.OutlinedButton("Обновить", on_click=refresh_mics),
                             ]
+                        ),
+                        ft.Row(
+                            [
+                                model_dd,
+                                model_rec_label,
+                            ],
+                            wrap=True,
                         ),
                         ft.Row(
                             [

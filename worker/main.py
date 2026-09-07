@@ -43,17 +43,117 @@ def data_root() -> Path:
     return Path.home() / ".stenograf"
 
 
+def recommend_model_id(profile) -> str:
+    """Catalog id suggested for this hardware (matches UI ★ badge)."""
+    from worker.asr_backend import cuda_runtime_available
+
+    if getattr(profile, "prefer_openvino", False) and not getattr(profile, "prefer_cuda", False):
+        return "whisper-base"
+    if profile.name == "low":
+        return "fw-tiny"
+    if profile.name == "high" and getattr(profile, "prefer_cuda", False) and cuda_runtime_available():
+        return "fw-small"
+    if profile.name == "high":
+        return "fw-base"
+    if getattr(profile, "prefer_cuda", False):
+        return "fw-base"
+    return "fw-base"
+
+
+def _fw_size_from_id(model_id: str) -> str:
+    mid = model_id.lower()
+    for size in ("large-v3", "large", "medium", "small", "base", "tiny"):
+        if size in mid:
+            if size.startswith("large"):
+                return "small"  # keep MVP practical on local boxes
+            if size == "medium":
+                return "small"
+            return size
+    return "base"
+
+
+def backend_for_model_id(model_id: str, profile, entries):
+    """Build ASR backend for an explicit catalog model id."""
+    from worker.asr_backend import (
+        FasterWhisperBackend,
+        WhisperCppOpenVinoBackend,
+        _find_whisper_cpp,
+        cuda_runtime_available,
+        select_backend,
+    )
+    from worker.models_catalog import models_root
+
+    by_id = {e.id: e for e in entries}
+    entry = by_id.get(model_id)
+    if entry is None:
+        emit({"event": "asr.model", "model_id": model_id, "warning": "unknown model id; using auto"})
+        return select_backend(profile), None
+
+    engine = (getattr(entry, "engine", "") or "").lower()
+    want_cuda = getattr(profile, "prefer_cuda", False) and cuda_runtime_available()
+    device = "cuda" if want_cuda else "cpu"
+    compute = "float16" if device == "cuda" else "int8"
+
+    if engine == "faster-whisper" or model_id.startswith("fw-"):
+        size = _fw_size_from_id(model_id)
+        backend = FasterWhisperBackend(
+            model_size=size,
+            device=device,
+            compute_type=compute,
+            allow_cpu_fallback=True,
+        )
+        return backend, model_id
+
+    if engine == "whisper.cpp" or model_id.startswith("whisper-"):
+        root = models_root()
+        path = root / entry.filename
+        binary = _find_whisper_cpp()
+        if binary and path.exists():
+            return WhisperCppOpenVinoBackend(binary, path), model_id
+        # No local ggml / binary — map to faster-whisper size of same tier
+        size = _fw_size_from_id(model_id)
+        emit(
+            {
+                "event": "asr.model",
+                "model_id": model_id,
+                "warning": f"ggml/binary missing; falling back to faster-whisper {size}",
+            }
+        )
+        backend = FasterWhisperBackend(
+            model_size=size,
+            device=device,
+            compute_type=compute,
+            allow_cpu_fallback=True,
+        )
+        return backend, model_id
+
+    emit({"event": "asr.model", "model_id": model_id, "warning": f"engine {engine!r} not selectable; auto"})
+    return select_backend(profile), None
+
+
+
 def main(argv: list[str] | None = None) -> int:
     _configure_stdio()
     parser = argparse.ArgumentParser(description="Stenograph native worker")
     parser.add_argument("--device", type=int, default=None, help="Input device id")
     parser.add_argument("--list-mics", action="store_true")
     parser.add_argument("--segment-sec", type=float, default=5.0)
-    parser.add_argument("--seconds", type=float, default=20.0, help="Demo run duration")
+    parser.add_argument(
+        "--seconds",
+        type=float,
+        default=0.0,
+        help="Run duration in seconds; 0 = until process stop (UI default)",
+    )
     parser.add_argument(
         "--download-model",
         metavar="ID",
         help="Download model id from catalog (e.g. whisper-base) then exit",
+    )
+    parser.add_argument(
+        "--model-id",
+        metavar="ID",
+        default=None,
+        help="Catalog model id (fw-base, whisper-small, …); also STENOGRAF_MODEL_ID",
     )
     parser.add_argument(
         "--backend",
@@ -64,7 +164,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     profile = detect_profile()
-    emit({"event": "hw.profile", "profile": profile.__dict__})
+    rec_id = recommend_model_id(profile)
+    emit(
+        {
+            "event": "hw.profile",
+            "profile": {**profile.__dict__, "recommend_model_id": rec_id},
+            "recommend_model_id": rec_id,
+        }
+    )
 
     entries = merge_with_defaults(load_index())
     save_index(entries)
@@ -127,10 +234,15 @@ def main(argv: list[str] | None = None) -> int:
         emit({"event": "mic.list", "devices": capture.list_input_devices()})
         return 0
 
+    model_id = args.model_id or os.environ.get("STENOGRAF_MODEL_ID") or None
+    selected_model_id = None
+
     if args.backend == "stub":
         from worker.asr_backend import StubBackend
 
         backend = StubBackend()
+    elif model_id:
+        backend, selected_model_id = backend_for_model_id(model_id, profile, entries)
     elif args.backend == "faster-whisper":
         from worker.asr_backend import FasterWhisperBackend, cuda_runtime_available
 
@@ -149,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
             compute_type=compute,
             allow_cpu_fallback=True,
         )
+        selected_model_id = f"fw-{size}"
     elif args.backend == "whisper.cpp":
         from worker.asr_backend import WhisperCppOpenVinoBackend, _find_whisper_cpp, _pick_model_file
 
@@ -164,10 +277,16 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 1
         backend = WhisperCppOpenVinoBackend(binary, model)
+        selected_model_id = model_id
     else:
         backend = select_backend(profile)
+        selected_model_id = rec_id
 
-    emit({"event": "asr.backend", **describe_backend(backend)})
+    info = describe_backend(backend)
+    if selected_model_id:
+        info["model_id"] = selected_model_id
+    info["recommend_model_id"] = rec_id
+    emit({"event": "asr.backend", **info})
 
     def run_job(job: AsrJob) -> AsrResult:
         try:
@@ -223,9 +342,9 @@ def main(argv: list[str] | None = None) -> int:
     capture.start()
     emit({"event": "capture.started", "device_id": args.device})
 
-    deadline = time.time() + args.seconds
+    deadline = None if args.seconds <= 0 else time.time() + args.seconds
     try:
-        while time.time() < deadline:
+        while deadline is None or time.time() < deadline:
             result = asr.poll_result(timeout=0.5)
             if result:
                 emit(

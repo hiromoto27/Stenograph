@@ -37,6 +37,7 @@ class WorkerClient:
         mic_id: str | None = None,
         seconds: float | None = None,
         segment_sec: float = 3.0,
+        model_id: str | None = None,
     ) -> None:
         if self.running:
             return
@@ -45,8 +46,12 @@ class WorkerClient:
             cmd.extend(["--device", str(int(mic_id)) if str(mic_id).isdigit() else mic_id])
         if seconds is not None:
             cmd.extend(["--seconds", str(seconds)])
+        if model_id:
+            cmd.extend(["--model-id", str(model_id)])
         env = os.environ.copy()
         env["PYTHONPATH"] = str(self.worker_cwd) + os.pathsep + env.get("PYTHONPATH", "")
+        if model_id:
+            env["STENOGRAF_MODEL_ID"] = str(model_id)
         self._stop.clear()
         self._proc = subprocess.Popen(
             cmd,
