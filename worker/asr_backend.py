@@ -165,24 +165,38 @@ def _find_whisper_cpp() -> Path | None:
 def select_backend(profile: HardwareProfile) -> AsrBackend:
     """
     Preference:
-      mid/high + whisper.cpp binary + model → OpenVINO/whisper.cpp
-      else faster-whisper if installed
+      high/CUDA → faster-whisper CUDA
+      mid + prefer_openvino + whisper.cpp binary/model → OpenVINO
+      else faster-whisper CPU
       else stub
     """
-    binary = _find_whisper_cpp()
-    model = _pick_model_file(profile)
-    if binary and model and profile.name in ("mid", "high"):
-        return WhisperCppOpenVinoBackend(binary, model)
-
-    # model size for faster-whisper
     size = "base"
     if profile.name == "low":
         size = "tiny"
     elif profile.name == "high":
         size = "small"
 
+    if getattr(profile, "prefer_cuda", False):
+        try:
+            return FasterWhisperBackend(model_size=size, device="cuda", compute_type="float16")
+        except Exception:
+            try:
+                return FasterWhisperBackend(model_size=size, device="cuda", compute_type="int8_float16")
+            except Exception:
+                pass  # fall through to CPU / OpenVINO
+
+    binary = _find_whisper_cpp()
+    model = _pick_model_file(profile)
+    if (
+        binary
+        and model
+        and getattr(profile, "prefer_openvino", profile.name in ("mid", "high"))
+        and not getattr(profile, "prefer_cuda", False)
+    ):
+        return WhisperCppOpenVinoBackend(binary, model)
+
     try:
-        return FasterWhisperBackend(model_size=size)
+        return FasterWhisperBackend(model_size=size, device="cpu", compute_type="int8")
     except Exception:
         return StubBackend()
 

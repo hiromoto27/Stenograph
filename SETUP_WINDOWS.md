@@ -2,6 +2,8 @@
 
 Цель: mic → протокол → DOCX/HTML. Сначала можно на **stub** / **faster-whisper**, OpenVINO — следом.
 
+Машины: Zenbook Arc → профиль **mid** (OpenVINO опционально); ПК **32 ГБ + RTX 4060 Ti** → **high** (`faster-whisper` CUDA, base/small). Для CUDA: `pip install torch` с CUDA-сборкой до/вместе с faster-whisper.
+
 ## 0. Репо
 
 ```bat

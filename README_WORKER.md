@@ -60,6 +60,13 @@ python -m worker.main --download-model whisper-base
 
 Emits `models.download` progress events; stores under `%LOCALAPPDATA%\Stenograf\models`.
 
+
+### Profiles
+
+- **high** (e.g. 32GB + RTX 4060 Ti): `faster-whisper` CUDA, model small/base; OpenVINO not required.
+- **mid** (Zenbook Arc): whisper.cpp OpenVINO if available, else faster-whisper CPU.
+- **low**: tiny/base CPU.
+
 ## Next
 
 1. Fill real model URLs/sha256 in catalog + downloader UX.
