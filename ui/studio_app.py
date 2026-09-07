@@ -140,6 +140,39 @@ def main(page: ft.Page) -> None:
         {"task_id": "t-report", "title": "Отчёт руководству"},
     ]
 
+    tasks_list_col = ft.Column(spacing=8)
+    sidebar_new_field = ft.TextField(label="Новая задача", bgcolor=SURFACE2, dense=True, expand=True)
+
+    def refresh_tasks_sidebar() -> None:
+        tasks_list_col.controls.clear()
+        for t in tasks_sidebar:
+            tasks_list_col.controls.append(
+                ft.Container(
+                    content=ft.Column(
+                        [
+                            ft.Text(t["title"], size=13, color=TEXT),
+                            ft.Text("0 реплик · Новичок", size=11, color=MUTED),
+                        ],
+                        spacing=2,
+                    ),
+                    bgcolor=SURFACE2,
+                    padding=10,
+                    border_radius=8,
+                )
+            )
+
+    def add_sidebar_task(_: ft.ControlEvent | None = None) -> None:
+        title = (sidebar_new_field.value or "").strip()
+        if not title:
+            set_status("Введите название новой задачи")
+            return
+        tasks_sidebar.append({"task_id": f"local-{len(tasks_sidebar)+1}", "title": title})
+        sidebar_new_field.value = ""
+        refresh_tasks_sidebar()
+        set_status(f"Создана задача: {title}")
+        page.update()
+
+
 
     mic_dd = ft.Dropdown(label="Микрофон", options=[], width=320, dense=True, bgcolor=SURFACE2)
     model_dd = ft.Dropdown(label="Модель ASR", options=[], width=360, dense=True, bgcolor=SURFACE2)
@@ -524,6 +557,7 @@ def main(page: ft.Page) -> None:
         client.send({"event": "task.create", "utterance_id": uid, "title": title})
         tasks_sidebar.append({"task_id": f"local-{len(tasks_sidebar)+1}", "title": title})
         new_task_field.value = ""
+        refresh_tasks_sidebar()
         classify_panel.visible = False
         set_status(f"Создана задача: {title}")
         page.update()
@@ -734,24 +768,18 @@ def main(page: ft.Page) -> None:
                         [
                             ft.Text("Задачи", size=18, weight=ft.FontWeight.W_600, color=TEXT),
                             ft.Text("Профили ключевых слов — следующий слой", size=11, color=MUTED),
-                            ft.TextField(label="Новая задача", bgcolor=SURFACE2, dense=True),
-                            *[
-                                ft.Container(
-                                    content=ft.Column(
-                                        [
-                                            ft.Text(t["title"], size=13, color=TEXT),
-                                            ft.Text("0 реплик · Новичок", size=11, color=MUTED),
-                                        ],
-                                        spacing=2,
-                                    ),
-                                    bgcolor=SURFACE2,
-                                    padding=10,
-                                    border_radius=8,
-                                )
-                                for t in tasks_sidebar
-                            ],
+                            ft.Row(
+                                [
+                                    sidebar_new_field,
+                                    ft.FilledButton("+", bgcolor=ACCENT, color=ACCENT_FG, on_click=add_sidebar_task),
+                                ],
+                                spacing=6,
+                            ),
+                            tasks_list_col,
                         ],
                         spacing=10,
+                        scroll=ft.ScrollMode.AUTO,
+                        expand=True,
                     ),
                 ),
             ],
@@ -863,6 +891,7 @@ def main(page: ft.Page) -> None:
     rebuild_nav()
     render_body()
     page.add(ft.Column([header, body], expand=True, spacing=0))
+    refresh_tasks_sidebar()
     refresh_mics()
     load_models_from_disk()
 
