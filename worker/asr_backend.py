@@ -44,42 +44,90 @@ class FasterWhisperBackend:
 
     name = "faster-whisper"
 
-    def __init__(self, model_size: str = "base", device: str = "cpu", compute_type: str = "int8") -> None:
+    def __init__(
+        self,
+        model_size: str = "base",
+        device: str = "cpu",
+        compute_type: str = "int8",
+        *,
+        allow_cpu_fallback: bool = True,
+    ) -> None:
         import os
 
-        # Slow networks: default HF read timeout is too aggressive for first download.
         os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "300")
         os.environ.setdefault("HF_HUB_ETAG_TIMEOUT", "60")
 
         from faster_whisper import WhisperModel  # type: ignore
 
-        try:
-            self._model = WhisperModel(model_size, device=device, compute_type=compute_type)
-        except Exception as exc:  # noqa: BLE001
-            raise RuntimeError(
-                f"faster-whisper failed to load '{model_size}' on {device}/{compute_type}: {exc}. "
-                "Retry with HF_HUB_DOWNLOAD_TIMEOUT=300, or pre-download via huggingface-cli, "
-                "or use --backend stub / whisper.cpp ggml from our catalog "
-                "(python -m worker.main --download-model whisper-base)."
-            ) from exc
         self._model_size = model_size
+        self.device = device
+        self.compute_type = compute_type
+        self.fallback_note: str | None = None
+
+        attempts: list[tuple[str, str]] = [(device, compute_type)]
+        if allow_cpu_fallback and device != "cpu":
+            attempts.append(("cpu", "int8"))
+
+        last_exc: Exception | None = None
+        for dev, ctype in attempts:
+            try:
+                self._model = WhisperModel(model_size, device=dev, compute_type=ctype)
+                self.device = dev
+                self.compute_type = ctype
+                if (dev, ctype) != (device, compute_type):
+                    self.fallback_note = (
+                        f"requested {device}/{compute_type} failed ({last_exc}); using {dev}/{ctype}"
+                    )
+                break
+            except Exception as exc:  # noqa: BLE001
+                last_exc = exc
+                msg = str(exc).lower()
+                # Missing CUDA runtime libs (cublas64_12.dll etc.) — try CPU.
+                if allow_cpu_fallback and device != "cpu" and (
+                    "cublas" in msg or "cuda" in msg or "dll" in msg or "cannot be loaded" in msg
+                ):
+                    continue
+                if (dev, ctype) == attempts[-1]:
+                    raise RuntimeError(
+                        f"faster-whisper failed to load '{model_size}' on {device}/{compute_type}: {exc}. "
+                        "Install CUDA toolkit 12.x (cublas64_12.dll) for GPU, or use CPU "
+                        "(--backend faster-whisper will auto-fallback), or whisper.cpp ggml."
+                    ) from exc
+        else:
+            raise RuntimeError(
+                f"faster-whisper failed to load '{model_size}': {last_exc}"
+            )
 
     def transcribe(self, wav_path: Path, language: str = "ru") -> Transcription:
         t0 = time.time()
-        segments, info = self._model.transcribe(str(wav_path), language=language, vad_filter=True)
+        try:
+            segments, info = self._model.transcribe(str(wav_path), language=language, vad_filter=True)
+        except Exception as exc:  # noqa: BLE001
+            msg = str(exc).lower()
+            if self.device != "cpu" and ("cublas" in msg or "cuda" in msg or "dll" in msg):
+                # Lazy fallback: rebuild on CPU and retry once.
+                from faster_whisper import WhisperModel  # type: ignore
+
+                self._model = WhisperModel(self._model_size, device="cpu", compute_type="int8")
+                self.fallback_note = f"CUDA runtime missing at infer ({exc}); switched to cpu/int8"
+                self.device = "cpu"
+                self.compute_type = "int8"
+                segments, info = self._model.transcribe(str(wav_path), language=language, vad_filter=True)
+            else:
+                raise
         parts: list[str] = []
         probs: list[float] = []
         for seg in segments:
             parts.append(seg.text.strip())
             if seg.avg_logprob is not None:
-                # map logprob roughly into 0..1 for UI only
                 probs.append(max(0.0, min(1.0, 1.0 + float(seg.avg_logprob) / 5.0)))
         text = " ".join(p for p in parts if p).strip()
         conf = sum(probs) / len(probs) if probs else None
+        backend = f"{self.name}:{self._model_size}:{self.device}"
         return Transcription(
             text=text,
             confidence=conf,
-            backend=f"{self.name}:{self._model_size}",
+            backend=backend,
             duration_sec=time.time() - t0,
         )
 
@@ -192,10 +240,20 @@ def select_backend(profile: HardwareProfile) -> AsrBackend:
 
     if getattr(profile, "prefer_cuda", False):
         try:
-            return FasterWhisperBackend(model_size=size, device="cuda", compute_type="float16")
+            return FasterWhisperBackend(
+                model_size=size,
+                device="cuda",
+                compute_type="float16",
+                allow_cpu_fallback=True,
+            )
         except Exception:
             try:
-                return FasterWhisperBackend(model_size=size, device="cuda", compute_type="int8_float16")
+                return FasterWhisperBackend(
+                    model_size=size,
+                    device="cuda",
+                    compute_type="int8_float16",
+                    allow_cpu_fallback=True,
+                )
             except Exception:
                 pass  # fall through to CPU / OpenVINO
 
@@ -222,4 +280,8 @@ def describe_backend(backend: AsrBackend) -> dict:
         info["model"] = str(backend.model)
     if isinstance(backend, FasterWhisperBackend):
         info["model_size"] = backend._model_size
+        info["device"] = backend.device
+        info["compute_type"] = backend.compute_type
+        if backend.fallback_note:
+            info["warning"] = backend.fallback_note
     return info

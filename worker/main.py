@@ -135,12 +135,14 @@ def main(argv: list[str] | None = None) -> int:
         from worker.asr_backend import FasterWhisperBackend
 
         size = "tiny" if profile.name == "low" else ("small" if profile.name == "high" else "base")
-        device = "cuda" if profile.prefer_cuda else "cpu"
+        device = "cuda" if getattr(profile, "prefer_cuda", False) else "cpu"
         compute = "float16" if device == "cuda" else "int8"
-        try:
-            backend = FasterWhisperBackend(model_size=size, device=device, compute_type=compute)
-        except Exception:
-            backend = FasterWhisperBackend(model_size=size, device="cpu", compute_type="int8")
+        backend = FasterWhisperBackend(
+            model_size=size,
+            device=device,
+            compute_type=compute,
+            allow_cpu_fallback=True,
+        )
     elif args.backend == "whisper.cpp":
         from worker.asr_backend import WhisperCppOpenVinoBackend, _find_whisper_cpp, _pick_model_file
 
