@@ -1,13 +1,22 @@
 # Стенограф (Stenograph)
 
-Локальный диктофон для Windows: речь → протокол → задачи/карта (позже).
-**Целевой MVP-shell: Flet UI + native Python worker** (не браузерное превью).
+Локальный Windows-диктофон: речь → протокол → задачи.
 
-Документы:
-- [MVP.md](./MVP.md) — скоуп и инварианты
+**Продукт для Windows:** `ui/` + `worker/`. Запуск:
+
+```bat
+python -m ui.main
+```
+
+`src/` и Tauri (`src-tauri/`) — legacy web preview; **не развивать** под Windows MVP.
+
+## Документы
+
+- [DESIGN.md](./DESIGN.md) — UI / токены
+- [LOGIC.md](./LOGIC.md) — классификатор, kind, пороги (эталон)
 - [SETUP_WINDOWS.md](./SETUP_WINDOWS.md) — первый прогон на Zenbook / Arc
-- [README_WORKER.md](./README_WORKER.md) — worker / ASR
-- [README_UI.md](./README_UI.md) — Flet UI / экспорт
+
+Также: [MVP.md](./MVP.md), [README_WORKER.md](./README_WORKER.md), [README_UI.md](./README_UI.md).
 
 ## Быстрый старт (dev)
 
@@ -21,18 +30,13 @@ python -m worker.main --list-mics
 python -m ui.main
 ```
 
-Данные:
-- аудио: `%LOCALAPPDATA%\Stenograf\audio_queue`
-- модели: `%LOCALAPPDATA%\Stenograf\models`
-- экспорт: `%LOCALAPPDATA%\Stenograf\exports`
+Данные: `%LOCALAPPDATA%\Stenograf\` (`audio_queue`, `models`, `exports`, `tasks.json`).
 
 ## Статус
 
 - [x] Worker: capture → диск → очередь ASR
-- [x] ASR: whisper.cpp/OpenVINO (если есть) → faster-whisper → stub
+- [x] ASR: whisper.cpp/OpenVINO (если есть) → faster-whisper → stub; VAD on by default (`STENOGRAF_VAD=0` off)
 - [x] Flet UI: mic, очередь, протокол, backend/confidence
-- [x] Экспорт DOCX/HTML (оглавление, якоря)
+- [x] Экспорт DOCX/HTML
+- [x] Классификатор / «Куда отнести?» — `task.suggest` (intent + cosine + feedback)
 - [ ] Первый стабильный прогон на целевом Zenbook
-- [ ] Задачи / напоминания / mind-map / RAG / гайды — после MVP
-
-Превью React/PWA и `src-tauri/` в репо — **legacy/справочно**, не целевой Windows-shell.
