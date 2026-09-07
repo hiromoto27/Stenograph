@@ -17,7 +17,8 @@ from worker.classifier import apply_feedback, suggest as classify_suggest
 from worker.essence import task_essence
 from worker.graph import build_edges
 from worker.meetings import MeetingTracker
-from worker.tasks_store import create_task, hide_pair, link_tasks, load_tasks, save_tasks
+from worker.ics_export import export_ics
+from worker.tasks_store import create_task, hide_pair, level_label, link_tasks, load_tasks, save_tasks, snooze_task
 from worker.models_catalog import (
     download_with_resume,
     load_index,
@@ -417,8 +418,10 @@ def main(argv: list[str] | None = None) -> int:
                 "title": t["title"],
                 "hits": t.get("hits", 0),
                 "misses": t.get("misses", 0),
+                "level": level_label(int(t.get("hits") or 0), int(t.get("misses") or 0)),
                 "remind_at": t.get("remind_at"),
                 "due_at": t.get("due_at"),
+                "repeat_min": t.get("repeat_min"),
             }
             for t in tasks
         ]})
@@ -520,6 +523,7 @@ def main(argv: list[str] | None = None) -> int:
                             "score": top["score"],
                         }
                     )
+                    emit_tasks_list()
                     emit_map_state()
             return
         if et == "asr.model":
@@ -549,6 +553,15 @@ def main(argv: list[str] | None = None) -> int:
             hide_pair(tasks, str(cmd.get("task_a") or ""), str(cmd.get("task_b") or ""))
             emit_map_state()
             return
+        if et == "task.snooze":
+            snooze_task(tasks, str(cmd.get("task_id") or ""), float(cmd.get("minutes") or 15))
+            emit_tasks_list()
+            return
+        if et == "ics.export":
+            dest = data_root() / "exports" / "reminders.ics"
+            path = export_ics(tasks, dest)
+            emit({"event": "ics.exported", "path": str(path)})
+            return
 
         meta = pending_suggest.pop(uid, {})
         text_u = str(meta.get("text") or cmd.get("text") or "")
@@ -559,6 +572,7 @@ def main(argv: list[str] | None = None) -> int:
             mode = "auto" if meta.get("auto") else "ask"
             apply_feedback(tasks, chosen_id=tid, utterance=text_u, suggested_ids=suggested_ids, mode=mode)
             emit({"event": "task.assigned", "utterance_id": uid, "task_id": tid})
+            emit_tasks_list()
             emit_map_state()
         elif et == "task.create":
             title = str(cmd.get("title") or "Новая задача")
@@ -566,6 +580,7 @@ def main(argv: list[str] | None = None) -> int:
             tasks = load_tasks()
             apply_feedback(tasks, chosen_id=task["task_id"], utterance=text_u, suggested_ids=suggested_ids, mode="ask")
             emit({"event": "task.created", "utterance_id": uid, "task": {"task_id": task["task_id"], "title": task["title"]}})
+            emit_tasks_list()
             emit_map_state()
         elif et == "task.skip":
             emit({"event": "task.skipped", "utterance_id": uid})
@@ -617,6 +632,7 @@ def main(argv: list[str] | None = None) -> int:
                             "auto": True,
                             "score": top["score"],
                         })
+                        emit_tasks_list()
                         emit_map_state()
     finally:
         capture.stop()

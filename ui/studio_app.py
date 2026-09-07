@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from collections import deque
+from datetime import datetime
 import math
 import os
 import subprocess
@@ -154,12 +155,63 @@ def main(page: ft.Page) -> None:
             ]
         ),
     )
+    search_results_col = ft.Column(spacing=6)
+
+    def _dismiss_search(_: ft.ControlEvent | None = None) -> None:
+        search_panel.visible = False
+        page.update()
+
+    search_panel = ft.Container(
+        visible=False,
+        bgcolor=SURFACE,
+        border=ft.Border.all(1, BORDER),
+        border_radius=12,
+        padding=12,
+        content=ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Text("Поиск по архиву", size=13, weight=ft.FontWeight.W_600, color=TEXT, expand=True),
+                        ft.IconButton(ft.Icons.CLOSE, icon_size=14, icon_color=MUTED, on_click=_dismiss_search),
+                    ]
+                ),
+                search_results_col,
+            ],
+            spacing=8,
+        ),
+    )
+
+    def do_search(e: ft.ControlEvent) -> None:
+        from dataclasses import asdict
+
+        from worker.search import search_archive
+
+        query = (e.control.value or "").strip()
+        search_results_col.controls.clear()
+        if not query:
+            search_panel.visible = False
+            page.update()
+            return
+        results = search_archive(query, [asdict(l) for l in protocol_entries], tasks_sidebar)
+        if not results:
+            search_results_col.controls.append(ft.Text("Ничего не найдено", size=12, color=MUTED))
+        for r in results:
+            pct = int(round(float(r.get("score") or 0) * 100))
+            search_results_col.controls.append(
+                ft.Container(
+                    content=ft.Text(f"{pct}% — {r.get('text')}", size=12, color=TEXT),
+                    bgcolor=SURFACE2,
+                    padding=8,
+                    border_radius=8,
+                )
+            )
+        search_panel.visible = True
+        page.update()
+
     pending_utterance: dict[str, Any] = {}
-    tasks_sidebar: list[dict[str, Any]] = [
-        {"task_id": "t-kitchen", "title": "Ремонт кухни"},
-        {"task_id": "t-buy", "title": "Закупка материалов"},
-        {"task_id": "t-report", "title": "Отчёт руководству"},
-    ]
+    # Mirror of worker's tasks_store — populated from "tasks.list" events only;
+    # never fabricate ids/rows locally, or they'd diverge from the real backend.
+    tasks_sidebar: list[dict[str, Any]] = []
 
     tasks_list_col = ft.Column(spacing=8)
     sidebar_new_field = ft.TextField(label="Новая задача", bgcolor=SURFACE2, dense=True, expand=True)
@@ -167,12 +219,15 @@ def main(page: ft.Page) -> None:
     def refresh_tasks_sidebar() -> None:
         tasks_list_col.controls.clear()
         for t in tasks_sidebar:
+            hits = int(t.get("hits") or 0)
+            misses = int(t.get("misses") or 0)
+            level = t.get("level") or "Новичок"
             tasks_list_col.controls.append(
                 ft.Container(
                     content=ft.Column(
                         [
                             ft.Text(t["title"], size=13, color=TEXT),
-                            ft.Text("0 реплик · Новичок", size=11, color=MUTED),
+                            ft.Text(f"{hits} реплик · {level}", size=11, color=MUTED),
                         ],
                         spacing=2,
                     ),
@@ -187,13 +242,8 @@ def main(page: ft.Page) -> None:
         if not title:
             set_status("Введите название новой задачи")
             return
-        tasks_sidebar.append({"task_id": f"local-{len(tasks_sidebar)+1}", "title": title})
         sidebar_new_field.value = ""
-        refresh_tasks_sidebar()
-        try:
-            client.send({"event": "task.create", "utterance_id": "", "title": title})
-        except NameError:
-            pass  # client not ready yet at import — only called after start
+        client.send({"event": "task.create", "utterance_id": "", "title": title})
         set_status(f"Создана задача: {title}")
         page.update()
 
@@ -521,10 +571,15 @@ def main(page: ft.Page) -> None:
             page.update()
         elif et == "task.created":
             task = event.get("task") or {}
-            if task.get("title"):
-                tasks_sidebar.append({"task_id": task.get("task_id"), "title": task.get("title")})
-                refresh_tasks_sidebar()
             set_status(f"Задача создана: {task.get('title')}")
+            client.send({"event": "tasks.reload"})  # pick up the canonical row (hits/level)
+            page.update()
+        elif et == "tasks.list":
+            tasks_sidebar.clear()
+            tasks_sidebar.extend(event.get("tasks") or [])
+            refresh_tasks_sidebar()
+            if active_tab == "Сроки":
+                body.content = deadlines_view()
             page.update()
         elif et == "meeting.start":
             current_meeting_id = event.get("meeting_id")
@@ -545,6 +600,9 @@ def main(page: ft.Page) -> None:
             page.update()
         elif et == "map.state":
             map_view.set_state(event.get("nodes") or [], event.get("edges") or [])
+        elif et == "ics.exported":
+            set_status(f"Экспортировано: {event.get('path')}")
+            page.update()
         elif et == "models.list":
             models = event.get("models") or []
             if models:
@@ -753,9 +811,7 @@ def main(page: ft.Page) -> None:
             return
         uid = pending_utterance.get("utterance_id") or ""
         client.send({"event": "task.create", "utterance_id": uid, "title": title})
-        tasks_sidebar.append({"task_id": f"local-{len(tasks_sidebar)+1}", "title": title})
         new_task_field.value = ""
-        refresh_tasks_sidebar()
         classify_panel.visible = False
         set_status(f"Создана задача: {title}")
         page.update()
@@ -1072,6 +1128,68 @@ def main(page: ft.Page) -> None:
             spacing=10,
         )
 
+    def snooze_task_row(task_id: str, minutes: float = 15.0) -> None:
+        client.send({"event": "task.snooze", "task_id": task_id, "minutes": minutes})
+        set_status(f"Отложено на {int(minutes)} мин")
+
+    def export_ics_click(_: ft.ControlEvent) -> None:
+        client.send({"event": "ics.export"})
+        set_status("Экспорт .ics…")
+
+    def deadlines_view() -> ft.Control:
+        # LOGIC.md §11 — remind_at/due_at/repeat_min/reminded; список + месяц.
+        with_dates = [t for t in tasks_sidebar if t.get("remind_at") or t.get("due_at")]
+        by_month: dict[str, list[dict[str, Any]]] = {}
+        for t in with_dates:
+            ts = t.get("due_at") or t.get("remind_at")
+            try:
+                label = datetime.fromtimestamp(float(ts)).strftime("%B %Y")
+            except (TypeError, ValueError, OSError):
+                label = "Без даты"
+            by_month.setdefault(label, []).append(t)
+
+        rows: list[ft.Control] = []
+        if not with_dates:
+            rows.append(ft.Text("Нет напоминаний. Задайте remind_at/due_at задаче.", size=13, color=MUTED))
+        for month, items in by_month.items():
+            rows.append(ft.Text(month, size=13, weight=ft.FontWeight.W_600, color=MUTED))
+            for t in items:
+                ts = t.get("due_at") or t.get("remind_at")
+                try:
+                    when = datetime.fromtimestamp(float(ts)).strftime("%d.%m %H:%M")
+                except (TypeError, ValueError, OSError):
+                    when = "—"
+                tid = str(t.get("task_id") or "")
+                rows.append(
+                    ft.Container(
+                        content=ft.Row(
+                            [
+                                ft.Text(when, size=12, color=MUTED, width=90),
+                                ft.Text(t.get("title") or tid, size=13, color=TEXT, expand=True),
+                                ft.OutlinedButton("Отложить +15м", on_click=lambda e, tid=tid: snooze_task_row(tid)),
+                            ]
+                        ),
+                        bgcolor=SURFACE2,
+                        padding=10,
+                        border_radius=8,
+                    )
+                )
+
+        return ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Text("Сроки", size=32, weight=ft.FontWeight.W_600, color=TEXT, font_family="Georgia"),
+                        ft.Container(expand=True),
+                        ft.OutlinedButton("Экспорт .ics", on_click=export_ics_click),
+                    ]
+                ),
+                ft.Column(rows, spacing=8, scroll=ft.ScrollMode.AUTO, expand=True),
+            ],
+            expand=True,
+            spacing=12,
+        )
+
     def render_body() -> None:
         if active_tab == "Студия":
             body.content = studio_view()
@@ -1082,7 +1200,7 @@ def main(page: ft.Page) -> None:
             if client.running:
                 client.send({"event": "map.request"})
         elif active_tab == "Сроки":
-            body.content = stub_view("Напоминания", "Календарь + .ics — каркас.")
+            body.content = deadlines_view()
         elif active_tab == "Протокол":
             body.content = stub_view("Протокол", "Сборка из транскрипта; DOCX/HTML уже в Студии.")
         elif active_tab == "Гайды":
@@ -1181,6 +1299,7 @@ def main(page: ft.Page) -> None:
                             bgcolor=SURFACE,
                             border_color=BORDER,
                             border_radius=20,
+                            on_submit=do_search,
                         ),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
@@ -1193,7 +1312,7 @@ def main(page: ft.Page) -> None:
 
     rebuild_nav()
     render_body()
-    controls = [header, body, bottom_nav]
+    controls = [header, search_panel, body, bottom_nav]
     if browser_host is not None:
         controls.append(ft.Container(content=browser_host, width=1, height=1, opacity=0.01))
     page.add(ft.Column(controls, expand=True, spacing=0))
