@@ -46,7 +46,7 @@ class CaptureSession:
         try:
             import sounddevice as sd  # type: ignore
         except ImportError:
-            return [{"id": None, "name": "(sounddevice not installed)", "channels": 1}]
+            return [{"id": None, "name": "sounddevice not installed - run: pip install sounddevice", "channels": 0, "error": "missing_sounddevice", "hint": "pip install sounddevice"}]
 
         devices = []
         for i, d in enumerate(sd.query_devices()):
@@ -59,6 +59,8 @@ class CaptureSession:
                         "default_samplerate": d.get("default_samplerate"),
                     }
                 )
+        if not devices:
+            return [{"id": None, "name": "No input devices found", "channels": 0, "error": "no_input_devices"}]
         return devices
 
     def start(self) -> None:

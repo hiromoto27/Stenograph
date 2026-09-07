@@ -32,12 +32,8 @@ def _configure_stdio() -> None:
 
 
 def emit(payload: dict) -> None:
-    """Print one JSON event; never crash on console encoding."""
-    line = json.dumps(payload, ensure_ascii=False)
-    try:
-        print(line, flush=True)
-    except UnicodeEncodeError:
-        print(json.dumps(payload, ensure_ascii=True), flush=True)
+    """Print one JSON event as ASCII-escaped JSON (safe for Windows pipes/UI)."""
+    print(json.dumps(payload, ensure_ascii=True), flush=True)
 
 
 def data_root() -> Path:
@@ -102,12 +98,14 @@ def main(argv: list[str] | None = None) -> int:
             return 1
 
         def progress(done: int, total: int | None) -> None:
+            pct = round(100.0 * done / total, 1) if total and total > 0 else None
             emit(
                 {
                     "event": "models.download",
                     "id": entry.id,
                     "downloaded": done,
                     "total": total,
+                    "percent": pct,
                 }
             )
 
