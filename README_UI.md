@@ -1,38 +1,27 @@
-# Stenograph Flet UI (MVP)
+# Stenograph Flet UI
 
-UI shell for Windows MVP. Consumes worker JSON-line events on stdout:
+Dark **Studio** shell (Grok mockups) + worker JSON IPC.
 
-`hw.profile` · `models.list` · `models.download` · `mic.list` · `audio.chunk` · `asr.backend` · `asr.job` · `asr.result`
-
-## Screens (MVP)
-
-- Mic picker (+ refresh via `worker.main --list-mics`)
-- Start / Stop recording (spawns `python -m worker.main`)
-- ASR backend + queue counters + confidence in protocol
-- Models catalog (from `worker.models_catalog` / `models.list`; download when url+sha256 set)
-- Live protocol from `asr.result`
-- DOCX / HTML export (offline TOC + anchors) → `%LOCALAPPDATA%\Stenograf\exports`
-
-## Run (dev)
-
-Place this `ui/` package next to `worker/` in the Stenograph repo root.
+## Run
 
 ```bat
 pip install -r requirements-ui.txt
 set PYTHONPATH=.
+set STENOGRAF_FORCE_CPU=1
 python -m ui.main
 ```
 
-## Layout
+## Tabs
 
-```
-Stenograph/
-  worker/          # Разработчик 1
-  ui/              # Разработчик 2
-  requirements-ui.txt
-  README_UI.md
-```
+- **Студия** — mic, RMS level, record, transcript, DOCX/HTML
+- **Карта / Сроки / Протокол / Гайды** — stubs
+- **Ещё** — settings: hw profile + models catalog/download
 
-Interim IPC: JSON lines on stdout. Download buttons stay disabled until catalog has real url/sha256.
+## Modules
 
-Models are grouped by `engine`. Download is disabled for `faster-whisper` (library pulls HF itself).
+- `ui/studio_app.py` — shell
+- `ui/worker_client.py` — spawn worker, JSON lines
+- `ui/export_protocol.py` — DOCX/HTML
+- `ui/mvp_legacy.py` — previous flat MVP (optional)
+
+Classifier / task graph — later with worker Dev.
