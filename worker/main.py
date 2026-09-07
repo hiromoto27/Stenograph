@@ -13,6 +13,8 @@ from worker.asr_backend import describe_backend, select_backend
 from worker.asr_queue import AsrJob, AsrQueue, AsrResult
 from worker.capture import CaptureSession, db_to_level, rms_to_db
 from worker.hw_profile import detect_profile
+from worker.classifier import apply_feedback, suggest as classify_suggest
+from worker.tasks_store import create_task, load_tasks, save_tasks
 from worker.models_catalog import (
     download_with_resume,
     load_index,
@@ -342,9 +344,72 @@ def main(argv: list[str] | None = None) -> int:
     capture.start()
     emit({"event": "capture.started", "device_id": args.device})
 
+    tasks = load_tasks()
+    emit({"event": "tasks.list", "tasks": [
+        {"task_id": t["task_id"], "title": t["title"], "hits": t.get("hits", 0), "misses": t.get("misses", 0)}
+        for t in tasks
+    ]})
+
+    pending_suggest: dict[str, dict] = {}
+    import threading
+    import queue as queue_mod
+    cmd_q: queue_mod.Queue = queue_mod.Queue()
+
+    def _stdin_loop() -> None:
+        if sys.stdin is None or sys.stdin.closed:
+            return
+        try:
+            for line in sys.stdin:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    cmd_q.put(json.loads(line))
+                except json.JSONDecodeError:
+                    continue
+        except Exception:
+            return
+
+    threading.Thread(target=_stdin_loop, name="stdin-cmds", daemon=True).start()
+
+    def _handle_cmd(cmd: dict) -> None:
+        nonlocal tasks
+        et = cmd.get("event")
+        uid = str(cmd.get("utterance_id") or "")
+        meta = pending_suggest.pop(uid, {})
+        text_u = str(meta.get("text") or cmd.get("text") or "")
+        suggested_ids = [c["task_id"] for c in (meta.get("candidates") or [])]
+
+        if et == "task.assign":
+            tid = str(cmd.get("task_id") or "")
+            mode = "auto" if meta.get("auto") else "ask"
+            apply_feedback(tasks, chosen_id=tid, utterance=text_u, suggested_ids=suggested_ids, mode=mode)
+            emit({"event": "task.assigned", "utterance_id": uid, "task_id": tid})
+        elif et == "task.create":
+            title = str(cmd.get("title") or "Новая задача")
+            task = create_task(tasks, title)
+            tasks = load_tasks()
+            apply_feedback(tasks, chosen_id=task["task_id"], utterance=text_u, suggested_ids=suggested_ids, mode="ask")
+            emit({"event": "task.created", "utterance_id": uid, "task": {"task_id": task["task_id"], "title": task["title"]}})
+        elif et == "task.skip":
+            emit({"event": "task.skipped", "utterance_id": uid})
+        elif et == "asr.model":
+            emit({"event": "asr.model", "model_id": cmd.get("model_id"), "note": "restart worker to apply"})
+        elif et == "tasks.reload":
+            tasks = load_tasks()
+            emit({"event": "tasks.list", "tasks": [
+                {"task_id": t["task_id"], "title": t["title"], "hits": t.get("hits", 0), "misses": t.get("misses", 0)}
+                for t in tasks
+            ]})
+
     deadline = None if args.seconds <= 0 else time.time() + args.seconds
     try:
         while deadline is None or time.time() < deadline:
+            while True:
+                try:
+                    _handle_cmd(cmd_q.get_nowait())
+                except queue_mod.Empty:
+                    break
             result = asr.poll_result(timeout=0.5)
             if result:
                 emit(
@@ -357,6 +422,29 @@ def main(argv: list[str] | None = None) -> int:
                         "error": result.error,
                     }
                 )
+                text = (result.text or "").strip()
+                if text and len(text) >= 2 and not result.error:
+                    payload = classify_suggest(text, tasks, utterance_id=str(result.job_id))
+                    pending_suggest[str(result.job_id)] = payload
+                    emit(payload)
+                    # Intent create_task: still suggest UI create with title
+                    # Auto-assign only when auto and not create intent
+                    if payload.get("auto") and payload.get("candidates"):
+                        top = payload["candidates"][0]
+                        apply_feedback(
+                            tasks,
+                            chosen_id=top["task_id"],
+                            utterance=text,
+                            suggested_ids=[c["task_id"] for c in payload["candidates"]],
+                            mode="auto",
+                        )
+                        emit({
+                            "event": "task.assigned",
+                            "utterance_id": str(result.job_id),
+                            "task_id": top["task_id"],
+                            "auto": True,
+                            "score": top["score"],
+                        })
     finally:
         capture.stop()
         asr.stop()
