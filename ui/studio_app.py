@@ -15,6 +15,7 @@ import flet as ft
 
 from ui.export_protocol import ProtocolLine, default_export_dir, export_docx, export_html
 from ui.theme import ACCENT, ACCENT_FG, BG, BORDER, MUTED, OK, REC, REC_FG, SURFACE, SURFACE2, SURFACE3, TEXT, page_theme
+from ui.browser_stt import build_webview, webview_available
 from ui.worker_client import WorkerClient
 
 TABS = ("Студия", "Карта", "Сроки", "Протокол", "Гайды", "Ещё")
@@ -73,6 +74,12 @@ def main(page: ft.Page) -> None:
     queue_pending = 0
     queue_done = 0
     meeting_open = False
+    asr_engine = str(load_ui_settings().get("asr_engine") or "whisper")
+    listen_label = ft.Text("", size=12, color=MUTED)
+    partial_box = ft.Text("", size=13, italic=True, color=MUTED, visible=False)
+    browser_start = None
+    browser_stop = None
+    browser_host = None
 
     # --- header labels ---
     hw_label = ft.Text("Профиль: —", size=11, color=MUTED)
@@ -370,6 +377,20 @@ def main(page: ft.Page) -> None:
                 peak_level = max(lvl, peak_level * 0.82)
                 vu_history.append(peak_level)
                 paint_vu()
+        elif et == "asr.listening":
+            buf = event.get("buffered_sec")
+            rms = event.get("rms")
+            if isinstance(buf, (int, float)) and float(buf) > 0:
+                bits = ["слушаю…"]
+                bits.append(f"{float(buf):.1f} с")
+                if isinstance(rms, (int, float)):
+                    bits.append(f"rms={float(rms):.3f}")
+                listen_label.value = " · ".join(bits)
+            else:
+                listen_label.value = ""
+        elif et == "mic.warn":
+            reason = event.get("reason") or event.get("code") or "low_rms"
+            set_status(f"Микрофон: похоже не тот вход ({reason}). RMS < 0.01 — смените устройство.")
         elif et == "asr.backend":
             name = event.get("backend") or "?"
             bits = [str(name)]
@@ -507,6 +528,51 @@ def main(page: ft.Page) -> None:
 
     mic_dd.on_change = on_mic_pick
 
+    engine_dd = ft.Dropdown(
+        label="Движок STT",
+        width=280,
+        dense=True,
+        bgcolor=SURFACE2,
+        value=asr_engine if asr_engine in ("whisper", "browser") else "whisper",
+        options=[
+            ft.dropdown.Option(key="whisper", text="Whisper (офлайн worker)"),
+            ft.dropdown.Option(key="browser", text="Browser / Edge Web Speech"),
+        ],
+    )
+
+    def on_engine_pick(_: ft.ControlEvent) -> None:
+        nonlocal asr_engine
+        asr_engine = engine_dd.value or "whisper"
+        save_ui_settings(asr_engine=asr_engine)
+        avail = webview_available()
+        if asr_engine == "browser" and not avail:
+            set_status("Browser STT: поставьте flet-webview-all (Windows + WebView2)")
+        else:
+            set_status(f"Движок: {asr_engine}")
+
+    engine_dd.on_change = on_engine_pick
+
+    def on_browser_message(msg: dict) -> None:
+        mtype = msg.get("type")
+        uid = str(msg.get("utterance_id") or f"b-{int(__import__('time').time())}")
+        text_value = str(msg.get("text") or "").strip()
+        if mtype == "partial" and text_value:
+            partial_box.value = text_value
+            partial_box.visible = True
+            client.send({"event": "asr.partial", "utterance_id": uid, "text": text_value, "engine": "browser"})
+            page.update()
+        elif mtype == "final" and text_value:
+            partial_box.value = ""
+            partial_box.visible = False
+            append_protocol("browser", text_value, job_id=uid, backend="browser")
+            client.send({"event": "asr.final", "utterance_id": uid, "text": text_value, "engine": "browser"})
+            page.update()
+        elif mtype == "error":
+            set_status(f"Browser STT: {msg.get('error')}")
+
+    browser_host, browser_start, browser_stop = build_webview(on_browser_message)
+
+
 
 
     def show_suggest(utterance_id: str, text_value: str, candidates: list[dict[str, Any]]) -> None:
@@ -629,15 +695,24 @@ def main(page: ft.Page) -> None:
         rec_label.visible = True
         set_status(f"Запись… модель={mid or 'auto'}")
         save_ui_settings(device_id=mic_dd.value, model_id=mid)
-        client.start(mic_id=mic_dd.value, segment_sec=3.0, model_id=mid, seconds=0)
+        client.start(mic_id=mic_dd.value, segment_sec=3.0, model_id=mid, seconds=0, stt_engine=asr_engine)
+        if asr_engine == "browser" and browser_start:
+            browser_start(f"b-{int(__import__('time').time())}")
+            set_status("Browser STT + VU (sounddevice)")
+        elif asr_engine == "browser":
+            set_status("Browser выбран, но WebView недоступен — идёт только Whisper worker")
         page.update()
 
     def stop_rec(_: ft.ControlEvent) -> None:
         nonlocal recording
         recording = False
+        if browser_stop:
+            browser_stop()
         client.stop()
         rec_dot.visible = False
         rec_label.visible = False
+        listen_label.value = ""
+        partial_box.visible = False
         paint_vu()
         set_status("Остановлено")
         page.update()
@@ -787,6 +862,8 @@ def main(page: ft.Page) -> None:
                             spacing=8,
                         ),
                         queue_text,
+                        listen_label,
+                        partial_box,
                         status,
                         classify_panel,
                         transcript_box,
@@ -828,7 +905,13 @@ def main(page: ft.Page) -> None:
         return ft.Column(
             [
                 ft.Text("Настройки", size=32, weight=ft.FontWeight.W_600, color=TEXT, font_family="Georgia"),
-                ft.Text("Native: профиль железа + каталог моделей (не WASM/Web Speech).", size=12, color=MUTED),
+                ft.Text("Движок: Whisper (worker) или Browser/Edge Web Speech (WebView2).", size=12, color=MUTED),
+                engine_dd,
+                ft.Text(
+                    "Browser нужен flet-webview-all + Edge WebView2. VU всегда с sounddevice.",
+                    size=11,
+                    color=MUTED,
+                ),
                 hw_label,
                 backend_label,
                 ft.Row(
@@ -971,7 +1054,10 @@ def main(page: ft.Page) -> None:
 
     rebuild_nav()
     render_body()
-    page.add(ft.Column([header, body, bottom_nav], expand=True, spacing=0))
+    controls = [header, body, bottom_nav]
+    if browser_host is not None:
+        controls.append(ft.Container(content=browser_host, width=1, height=1, opacity=0.01))
+    page.add(ft.Column(controls, expand=True, spacing=0))
     refresh_tasks_sidebar()
     refresh_mics()
     load_models_from_disk()

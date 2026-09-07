@@ -38,6 +38,7 @@ class WorkerClient:
         seconds: float | None = None,
         segment_sec: float = 3.0,
         model_id: str | None = None,
+        stt_engine: str | None = None,
     ) -> None:
         if self.running:
             return
@@ -48,10 +49,14 @@ class WorkerClient:
             cmd.extend(["--seconds", str(seconds)])
         if model_id:
             cmd.extend(["--model-id", str(model_id)])
+        if stt_engine:
+            cmd.extend(["--stt-engine", str(stt_engine)])
         env = os.environ.copy()
         env["PYTHONPATH"] = str(self.worker_cwd) + os.pathsep + env.get("PYTHONPATH", "")
         if model_id:
             env["STENOGRAF_MODEL_ID"] = str(model_id)
+        if stt_engine:
+            env["STENOGRAF_STT_ENGINE"] = str(stt_engine)
         self._stop.clear()
         self._proc = subprocess.Popen(
             cmd,

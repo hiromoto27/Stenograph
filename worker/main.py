@@ -169,6 +169,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Catalog model id (fw-base, whisper-small, …); also STENOGRAF_MODEL_ID",
     )
     parser.add_argument(
+        "--stt-engine",
+        choices=("whisper", "browser"),
+        default=None,
+        help="whisper (local ASR) or browser (UI Web Speech; capture VU only). Also STENOGRAF_STT_ENGINE",
+    )
+    parser.add_argument(
         "--backend",
         choices=("auto", "stub", "faster-whisper", "whisper.cpp"),
         default="auto",
@@ -249,6 +255,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     model_id = args.model_id or os.environ.get("STENOGRAF_MODEL_ID") or None
+    stt_engine = (args.stt_engine or os.environ.get("STENOGRAF_STT_ENGINE") or "whisper").strip().lower()
+    if stt_engine not in ("whisper", "browser"):
+        stt_engine = "whisper"
+    emit({"event": "stt.engine", "engine": stt_engine})
     selected_model_id = None
 
     if args.backend == "stub":
@@ -372,6 +382,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         if skip_asr:
             emit({"event": "asr.skip", "reason": "rms_gate", "rms": rms, "rms_gate": rms_gate, "path": str(ev.path)})
+            return
+        if stt_engine == "browser":
+            # UI Web Speech owns STT; keep capture for VU / listening only
+            emit({"event": "asr.skip", "reason": "stt_engine_browser", "path": str(ev.path)})
             return
         job = asr.enqueue(ev.path, language="ru")
         emit({"event": "asr.job", "id": job.id, "pending": asr.pending()})
