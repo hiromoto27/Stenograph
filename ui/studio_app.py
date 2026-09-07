@@ -13,7 +13,7 @@ from typing import Any
 
 import flet as ft
 
-from ui.export_protocol import ProtocolLine, default_export_dir, export_docx, export_html
+from ui.export_protocol import ProtocolLine, default_export_dir, export_docx, export_html, export_package
 from ui.theme import ACCENT, ACCENT_FG, BG, BORDER, MUTED, OK, REC, REC_FG, SURFACE, SURFACE2, SURFACE3, TEXT, page_theme
 from ui.browser_stt import (
     build_webview,
@@ -148,7 +148,7 @@ def main(page: ft.Page) -> None:
         content=ft.Row(
             [
                 ft.Text("Пауза 8 с — собрать протокол?", size=12, color=TEXT, expand=True),
-                ft.OutlinedButton("Протокол", on_click=lambda e: (do_export("DOCX"), _dismiss_pause_nudge(e))),
+                ft.OutlinedButton("Протокол", on_click=lambda e: (do_export("PACKAGE"), _dismiss_pause_nudge(e))),
                 ft.IconButton(ft.Icons.CLOSE, icon_size=14, icon_color=MUTED, on_click=_dismiss_pause_nudge),
             ]
         ),
@@ -273,6 +273,14 @@ def main(page: ft.Page) -> None:
             badge.color = KIND_COLOR.get(kind, MUTED)
             badge.visible = True
             page.update()
+
+    def apply_task_assignment(job_id: str, task_id: str) -> None:
+        entry = protocol_by_id.get(job_id)
+        if entry is None or not task_id:
+            return
+        entry.task_id = task_id
+        title = next((t["title"] for t in tasks_sidebar if t["task_id"] == task_id), task_id)
+        entry.task_title = title
 
     def refresh_queue() -> None:
         queue_text.value = f"Очередь ASR: pending {queue_pending} · готово {queue_done}"
@@ -505,6 +513,7 @@ def main(page: ft.Page) -> None:
                     classify_hint.value = "Куда отнести?"
             page.update()
         elif et == "task.assigned":
+            apply_task_assignment(str(event.get("utterance_id") or ""), str(event.get("task_id") or ""))
             if event.get("auto"):
                 set_status(f"Авто-назначено → {event.get('task_id')} · score={event.get('score')}")
             classify_panel.visible = False
@@ -837,13 +846,17 @@ def main(page: ft.Page) -> None:
             set_status("Протокол пуст")
             return
         out = default_export_dir()
+        title = (topic_field.value or "").strip() or "Протокол встречи"
         try:
-            path = (
-                export_docx(protocol_entries, out / "protocol-latest.docx")
-                if kind == "DOCX"
-                else export_html(protocol_entries, out / "protocol-latest.html")
-            )
-            set_status(f"Экспорт {kind}: {path}")
+            if kind == "DOCX":
+                path = export_docx(protocol_entries, out / "protocol-latest.docx", title=title)
+                set_status(f"Экспорт DOCX: {path}")
+            elif kind == "HTML":
+                path = export_html(protocol_entries, out / "protocol-latest.html", title=title)
+                set_status(f"Экспорт HTML: {path}")
+            else:  # PACKAGE — LOGIC.md §9: протокол + действия + выжимка + черновик гайда
+                paths = export_package(protocol_entries, title=title)
+                set_status(f"Пакет собран: {paths['protocol_md'].parent}")
         except Exception as exc:  # noqa: BLE001
             set_status(f"Экспорт ошибка: {exc}")
 
@@ -961,6 +974,12 @@ def main(page: ft.Page) -> None:
                                     "HTML",
                                     style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12)),
                                     on_click=lambda e: do_export("HTML"),
+                                ),
+                                ft.OutlinedButton(
+                                    "Пакет",
+                                    tooltip="Протокол + действия + выжимка + черновик гайда",
+                                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=12)),
+                                    on_click=lambda e: do_export("PACKAGE"),
                                 ),
                             ],
                             wrap=True,

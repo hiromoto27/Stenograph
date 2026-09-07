@@ -83,7 +83,13 @@ def _normalize_task(t: dict[str, Any]) -> dict[str, Any]:
         "hits": int(t.get("hits") or 0),
         "misses": int(t.get("misses") or 0),
         "links": list(t.get("links") or []),
+        # LOGIC.md §11 — remind_at/due_at/repeat_min/reminded
         "remind_at": t.get("remind_at"),
+        "due_at": t.get("due_at"),
+        "repeat_min": t.get("repeat_min"),
+        "reminded": bool(t.get("reminded") or False),
+        # LOGIC.md §10 — manual links the user hid on the map (auto-edge suppression)
+        "hidden_pairs": list(t.get("hidden_pairs") or []),
     }
 
 
@@ -135,6 +141,51 @@ def create_task(tasks: list[dict[str, Any]], title: str) -> dict[str, Any]:
         "remind_at": None,
     }
     tasks.append(task)
+    save_tasks(tasks)
+    return task
+
+
+def link_tasks(tasks: list[dict[str, Any]], id_a: str, id_b: str) -> None:
+    """LOGIC.md §10 — drag task onto task → manual link (symmetric)."""
+    by_id = {t["task_id"]: t for t in tasks}
+    a, b = by_id.get(id_a), by_id.get(id_b)
+    if a is None or b is None or id_a == id_b:
+        return
+    if id_b not in a.setdefault("links", []):
+        a["links"].append(id_b)
+    if id_a not in b.setdefault("links", []):
+        b["links"].append(id_a)
+    save_tasks(tasks)
+
+
+def hide_pair(tasks: list[dict[str, Any]], id_a: str, id_b: str) -> None:
+    """LOGIC.md §10 — click an auto-edge → hide it (symmetric, survives re-ranking)."""
+    by_id = {t["task_id"]: t for t in tasks}
+    a, b = by_id.get(id_a), by_id.get(id_b)
+    if a is None or b is None or id_a == id_b:
+        return
+    if id_b not in a.setdefault("hidden_pairs", []):
+        a["hidden_pairs"].append(id_b)
+    if id_a not in b.setdefault("hidden_pairs", []):
+        b["hidden_pairs"].append(id_a)
+    save_tasks(tasks)
+
+
+def snooze_task(tasks: list[dict[str, Any]], task_id: str, minutes: float) -> dict[str, Any] | None:
+    """LOGIC.md §11 — «Отложить» = +minutes, reminded=False."""
+    import time as _time
+
+    by_id = {t["task_id"]: t for t in tasks}
+    task = by_id.get(task_id)
+    if task is None:
+        return None
+    base = task.get("remind_at") or _time.time()
+    try:
+        base = float(base)
+    except (TypeError, ValueError):
+        base = _time.time()
+    task["remind_at"] = max(base, _time.time()) + float(minutes) * 60.0
+    task["reminded"] = False
     save_tasks(tasks)
     return task
 

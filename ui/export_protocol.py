@@ -19,6 +19,8 @@ class ProtocolLine:
     meeting_id: str = ""
     kind: str = "speech"  # decision | risk | blocker | speech — LOGIC.md §7
     kind_score: float = 0.0
+    task_id: str = ""
+    task_title: str = ""
 
     @property
     def anchor(self) -> str:
@@ -28,7 +30,7 @@ class ProtocolLine:
 
 
 def _now_stamp() -> str:
-    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
 
 
 def export_docx(lines: list[ProtocolLine], dest: Path, *, title: str = "Протокол встречи") -> Path:
@@ -112,6 +114,140 @@ def export_html(lines: list[ProtocolLine], dest: Path, *, title: str = "Прот
 """
     dest.write_text(doc, encoding="utf-8")
     return dest
+
+
+# LOGIC.md §9 — template placeholders
+DEFAULT_TEMPLATE = """{{title}}
+{{date}}
+
+## Задачи
+{{tasks}}
+
+## Решения
+{{decisions}}
+
+## Риски и блокеры
+{{risks}}
+
+## Действия
+{{actions}}
+
+## Без задачи
+{{unassigned}}
+"""
+
+
+def _bullet_list(items: list[str], *, empty: str = "(пусто)") -> str:
+    if not items:
+        return f"- {empty}"
+    return "\n".join(f"- {item}" for item in items)
+
+
+def render_sections(lines: list[ProtocolLine]) -> dict[str, str]:
+    """LOGIC.md §9 — split a protocol into template sections."""
+    decisions = [l.text for l in lines if l.kind == "decision"]
+    risks = [l.text for l in lines if l.kind == "risk"]
+    blockers = [l.text for l in lines if l.kind == "blocker"]
+    unassigned = [l.text for l in lines if not l.task_id]
+    actions = [f"{l.task_title or l.task_id}: {l.text}" for l in lines if l.task_id]
+    task_titles = sorted({l.task_title or l.task_id for l in lines if l.task_id})
+    risk_block = _bullet_list(risks) if risks else ""
+    blocker_block = _bullet_list([f"[блокер] {b}" for b in blockers]) if blockers else ""
+    risks_section = "\n".join(x for x in (risk_block, blocker_block) if x) or "- (пусто)"
+    return {
+        "tasks": _bullet_list(task_titles),
+        "decisions": _bullet_list(decisions),
+        "risks": risks_section,
+        "unassigned": _bullet_list(unassigned),
+        "actions": _bullet_list(actions),
+    }
+
+
+def render_template(
+    template: str,
+    lines: list[ProtocolLine],
+    *,
+    title: str = "Протокол встречи",
+    date: str | None = None,
+) -> str:
+    sections = render_sections(lines)
+    stamp = date or datetime.now().astimezone().strftime("%Y-%m-%d %H:%M")
+    out = template
+    for key, value in {**sections, "title": title, "date": stamp}.items():
+        out = out.replace("{{" + key + "}}", value)
+    return out
+
+
+def export_digest(lines: list[ProtocolLine], dest: Path, *, title: str = "Протокол встречи") -> Path:
+    """Короткая выжимка: счётчики + решения/риски/блокеры одной строкой каждое."""
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    sections = render_sections(lines)
+    counts = (
+        f"Реплик: {len(lines)} · решений: {sum(1 for l in lines if l.kind == 'decision')} · "
+        f"рисков: {sum(1 for l in lines if l.kind == 'risk')} · "
+        f"блокеров: {sum(1 for l in lines if l.kind == 'blocker')}"
+    )
+    body = (
+        f"# {title} — выжимка\n\n{counts}\n\n"
+        f"## Решения\n{sections['decisions']}\n\n"
+        f"## Риски и блокеры\n{sections['risks']}\n\n"
+        f"## Действия\n{sections['actions']}\n"
+    )
+    dest.write_text(body, encoding="utf-8")
+    return dest
+
+
+def export_guide_draft(lines: list[ProtocolLine], dest: Path, *, title: str = "Протокол встречи") -> Path:
+    """Черновик гайда: пронумерованные действия из реплик, отнесённых к задачам."""
+    dest = Path(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    steps = [l for l in lines if l.task_id]
+    body_lines = [f"# {title} — черновик гайда", ""]
+    if not steps:
+        body_lines.append("Нет реплик, отнесённых к задачам.")
+    else:
+        for i, l in enumerate(steps, start=1):
+            body_lines.append(f"{i}. **{l.task_title or l.task_id}** — {l.text}")
+    dest.write_text("\n".join(body_lines) + "\n", encoding="utf-8")
+    return dest
+
+
+def _prune_old_packages(root: Path, *, keep: int = 50) -> None:
+    """LOGIC.md §9/§14 — cap stored protocol packages at 50."""
+    if not root.exists():
+        return
+    packages = sorted((p for p in root.iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime)
+    for stale in packages[:-keep] if len(packages) > keep else []:
+        for f in stale.glob("*"):
+            f.unlink(missing_ok=True)
+        stale.rmdir()
+
+
+def export_package(
+    lines: list[ProtocolLine],
+    *,
+    title: str = "Протокол встречи",
+    template: str = DEFAULT_TEMPLATE,
+    out_root: Path | None = None,
+) -> dict[str, Path]:
+    """LOGIC.md §9 — протокол + действия + выжимка + черновик гайда, до 50 пакетов."""
+    stamp = _now_stamp()
+    root = (out_root or default_export_dir()) / "packages" / stamp
+    root.mkdir(parents=True, exist_ok=True)
+
+    protocol_md = root / "protocol.md"
+    protocol_md.write_text(render_template(template, lines, title=title), encoding="utf-8")
+
+    paths = {
+        "protocol_md": protocol_md,
+        "protocol_docx": export_docx(lines, root / "protocol.docx", title=title),
+        "protocol_html": export_html(lines, root / "protocol.html", title=title),
+        "digest": export_digest(lines, root / "digest.md", title=title),
+        "guide_draft": export_guide_draft(lines, root / "guide-draft.md", title=title),
+    }
+    _prune_old_packages(root.parent, keep=50)
+    return paths
 
 
 def default_export_dir() -> Path:
