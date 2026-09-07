@@ -14,6 +14,29 @@ from worker.hw_profile import HardwareProfile
 from worker.models_catalog import ModelEntry, load_index, models_root
 
 
+def cuda_runtime_available() -> bool:
+    """True only if a cuBLAS DLL actually loads (driver != toolkit)."""
+    import os
+    if os.environ.get("STENOGRAF_FORCE_CPU", "").strip() in {"1", "true", "yes"}:
+        return False
+    if os.environ.get("STENOGRAF_FORCE_CUDA", "").strip() in {"1", "true", "yes"}:
+        return True
+    try:
+        import ctypes
+        from ctypes import wintypes  # noqa: F401
+    except Exception:
+        return False
+    for name in ("cublas64_12.dll", "cublas64_11.dll", "cublas64_10.dll"):
+        try:
+            ctypes.WinDLL(name)
+            return True
+        except OSError:
+            continue
+    return False
+
+
+
+
 @dataclass
 class Transcription:
     text: str
@@ -103,18 +126,16 @@ class FasterWhisperBackend:
         try:
             segments, info = self._model.transcribe(str(wav_path), language=language, vad_filter=True)
         except Exception as exc:  # noqa: BLE001
-            msg = str(exc).lower()
-            if self.device != "cpu" and ("cublas" in msg or "cuda" in msg or "dll" in msg):
-                # Lazy fallback: rebuild on CPU and retry once.
-                from faster_whisper import WhisperModel  # type: ignore
-
-                self._model = WhisperModel(self._model_size, device="cpu", compute_type="int8")
-                self.fallback_note = f"CUDA runtime missing at infer ({exc}); switched to cpu/int8"
-                self.device = "cpu"
-                self.compute_type = "int8"
-                segments, info = self._model.transcribe(str(wav_path), language=language, vad_filter=True)
-            else:
+            if self.device == "cpu":
                 raise
+            # Any CUDA-side failure (cublas DLL missing often surfaces here, not at load).
+            from faster_whisper import WhisperModel  # type: ignore
+
+            self._model = WhisperModel(self._model_size, device="cpu", compute_type="int8")
+            self.fallback_note = f"CUDA infer failed ({exc}); switched to cpu/int8"
+            self.device = "cpu"
+            self.compute_type = "int8"
+            segments, info = self._model.transcribe(str(wav_path), language=language, vad_filter=True)
         parts: list[str] = []
         probs: list[float] = []
         for seg in segments:
@@ -238,7 +259,7 @@ def select_backend(profile: HardwareProfile) -> AsrBackend:
     elif profile.name == "high":
         size = "small"
 
-    if getattr(profile, "prefer_cuda", False):
+    if getattr(profile, "prefer_cuda", False) and cuda_runtime_available():
         try:
             return FasterWhisperBackend(
                 model_size=size,
@@ -256,6 +277,9 @@ def select_backend(profile: HardwareProfile) -> AsrBackend:
                 )
             except Exception:
                 pass  # fall through to CPU / OpenVINO
+    elif getattr(profile, "prefer_cuda", False) and not cuda_runtime_available():
+        # Driver present but no cublas DLL — skip CUDA entirely.
+        pass
 
     binary = _find_whisper_cpp()
     model = _pick_model_file(profile)

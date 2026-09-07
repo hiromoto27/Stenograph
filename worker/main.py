@@ -132,10 +132,11 @@ def main(argv: list[str] | None = None) -> int:
 
         backend = StubBackend()
     elif args.backend == "faster-whisper":
-        from worker.asr_backend import FasterWhisperBackend
+        from worker.asr_backend import FasterWhisperBackend, cuda_runtime_available
 
         size = "tiny" if profile.name == "low" else ("small" if profile.name == "high" else "base")
-        device = "cuda" if getattr(profile, "prefer_cuda", False) else "cpu"
+        want_cuda = getattr(profile, "prefer_cuda", False) and cuda_runtime_available()
+        device = "cuda" if want_cuda else "cpu"
         compute = "float16" if device == "cuda" else "int8"
         backend = FasterWhisperBackend(
             model_size=size,
