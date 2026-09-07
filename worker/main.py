@@ -13,7 +13,31 @@ from worker.asr_backend import describe_backend, select_backend
 from worker.asr_queue import AsrJob, AsrQueue, AsrResult
 from worker.capture import CaptureSession
 from worker.hw_profile import detect_profile
-from worker.models_catalog import load_index, merge_with_defaults, models_root, save_index
+from worker.models_catalog import (
+    download_with_resume,
+    load_index,
+    merge_with_defaults,
+    models_root,
+    save_index,
+)
+
+
+def _configure_stdio() -> None:
+    """Windows cp1251 consoles break on non-ASCII JSON stdout."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[attr-defined]
+        except Exception:
+            pass
+
+
+def emit(payload: dict) -> None:
+    """Print one JSON event; never crash on console encoding."""
+    line = json.dumps(payload, ensure_ascii=False)
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        print(json.dumps(payload, ensure_ascii=True), flush=True)
 
 
 def data_root() -> Path:
@@ -24,6 +48,7 @@ def data_root() -> Path:
 
 
 def main(argv: list[str] | None = None) -> int:
+    _configure_stdio()
     parser = argparse.ArgumentParser(description="Stenograph native worker")
     parser.add_argument("--device", type=int, default=None, help="Input device id")
     parser.add_argument("--list-mics", action="store_true")
@@ -43,78 +68,56 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     profile = detect_profile()
-    print(json.dumps({"event": "hw.profile", "profile": profile.__dict__}, ensure_ascii=False), flush=True)
+    emit({"event": "hw.profile", "profile": profile.__dict__})
 
     entries = merge_with_defaults(load_index())
     save_index(entries)
-    print(
-        json.dumps(
-            {
-                "event": "models.list",
-                "root": str(models_root()),
-                "count": len(entries),
-                "ids": [e.id for e in entries],
-                "models": [
-                    {
-                        "id": e.id,
-                        "filename": e.filename,
-                        "url": e.url,
-                        "sha256": e.sha256,
-                        "size_bytes": e.size_bytes,
-                        "profile": e.profile,
-                        "engine": getattr(e, "engine", ""),
-                        "lang": getattr(e, "lang", "ru"),
-                        "notes": getattr(e, "notes", ""),
-                    }
-                    for e in entries
-                ],
-            },
-            ensure_ascii=False,
-        ),
-        flush=True,
+    emit(
+        {
+            "event": "models.list",
+            "root": str(models_root()),
+            "count": len(entries),
+            "ids": [e.id for e in entries],
+            "models": [
+                {
+                    "id": e.id,
+                    "filename": e.filename,
+                    "url": e.url,
+                    "sha256": e.sha256,
+                    "size_bytes": e.size_bytes,
+                    "profile": e.profile,
+                    "engine": getattr(e, "engine", ""),
+                    "lang": getattr(e, "lang", "ru"),
+                    "notes": getattr(e, "notes", ""),
+                }
+                for e in entries
+            ],
+        }
     )
 
     if args.download_model:
-        from worker.models_catalog import download_with_resume
-
         entry = next((e for e in entries if e.id == args.download_model), None)
         if not entry:
-            raise SystemExit(f"unknown model id: {args.download_model}")
+            emit({"event": "models.download", "id": args.download_model, "error": "unknown model id", "done": True})
+            return 1
 
-        def progress(done, total):
-            print(
-                json.dumps(
-                    {
-                        "event": "models.download",
-                        "id": entry.id,
-                        "downloaded": done,
-                        "total": total,
-                    },
-                    ensure_ascii=False,
-                ),
-                flush=True,
+        def progress(done: int, total: int | None) -> None:
+            emit(
+                {
+                    "event": "models.download",
+                    "id": entry.id,
+                    "downloaded": done,
+                    "total": total,
+                }
             )
 
         try:
             path = download_with_resume(entry, progress_cb=progress)
         except Exception as exc:  # noqa: BLE001
-            print(
-                json.dumps(
-                    {"event": "models.download", "id": entry.id, "error": str(exc), "done": True},
-                    ensure_ascii=False,
-                ),
-                flush=True,
-            )
+            emit({"event": "models.download", "id": entry.id, "error": str(exc), "done": True})
             return 1
-        print(
-            json.dumps(
-                {"event": "models.download", "id": entry.id, "path": str(path), "done": True},
-                ensure_ascii=False,
-            ),
-            flush=True,
-        )
+        emit({"event": "models.download", "id": entry.id, "path": str(path), "done": True})
         return 0
-
 
     capture = CaptureSession(
         out_dir=data_root() / "audio_queue",
@@ -123,10 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if args.list_mics:
-        print(
-            json.dumps({"event": "mic.list", "devices": capture.list_input_devices()}, ensure_ascii=False),
-            flush=True,
-        )
+        emit({"event": "mic.list", "devices": capture.list_input_devices()})
         return 0
 
     if args.backend == "stub":
@@ -137,19 +137,31 @@ def main(argv: list[str] | None = None) -> int:
         from worker.asr_backend import FasterWhisperBackend
 
         size = "tiny" if profile.name == "low" else ("small" if profile.name == "high" else "base")
-        backend = FasterWhisperBackend(model_size=size)
+        device = "cuda" if profile.prefer_cuda else "cpu"
+        compute = "float16" if device == "cuda" else "int8"
+        try:
+            backend = FasterWhisperBackend(model_size=size, device=device, compute_type=compute)
+        except Exception:
+            backend = FasterWhisperBackend(model_size=size, device="cpu", compute_type="int8")
     elif args.backend == "whisper.cpp":
         from worker.asr_backend import WhisperCppOpenVinoBackend, _find_whisper_cpp, _pick_model_file
 
         binary = _find_whisper_cpp()
         model = _pick_model_file(profile)
         if not binary or not model:
-            raise SystemExit("whisper.cpp binary/model not found; set STENOGRAF_WHISPER_CPP / models dir")
+            emit(
+                {
+                    "event": "asr.backend",
+                    "backend": "error",
+                    "error": "whisper.cpp binary/model not found; set STENOGRAF_WHISPER_CPP / models dir",
+                }
+            )
+            return 1
         backend = WhisperCppOpenVinoBackend(binary, model)
     else:
         backend = select_backend(profile)
 
-    print(json.dumps({"event": "asr.backend", **describe_backend(backend)}, ensure_ascii=False), flush=True)
+    emit({"event": "asr.backend", **describe_backend(backend)})
 
     def run_job(job: AsrJob) -> AsrResult:
         try:
@@ -173,52 +185,41 @@ def main(argv: list[str] | None = None) -> int:
     asr.start()
 
     def on_chunk(ev) -> None:
-        print(
-            json.dumps(
-                {
-                    "event": "audio.chunk",
-                    "path": str(ev.path),
-                    "device_id": ev.device_id,
-                    "rms": ev.rms,
-                    "started_at": ev.started_at,
-                },
-                ensure_ascii=False,
-            ),
-            flush=True,
+        emit(
+            {
+                "event": "audio.chunk",
+                "path": str(ev.path),
+                "device_id": ev.device_id,
+                "rms": ev.rms,
+                "started_at": ev.started_at,
+            }
         )
         job = asr.enqueue(ev.path, language="ru")
-        print(
-            json.dumps({"event": "asr.job", "id": job.id, "pending": asr.pending()}, ensure_ascii=False),
-            flush=True,
-        )
+        emit({"event": "asr.job", "id": job.id, "pending": asr.pending()})
 
     capture.on_chunk = on_chunk
     capture.start()
-    print(json.dumps({"event": "capture.started", "device_id": args.device}, ensure_ascii=False), flush=True)
+    emit({"event": "capture.started", "device_id": args.device})
 
     deadline = time.time() + args.seconds
     try:
         while time.time() < deadline:
             result = asr.poll_result(timeout=0.5)
             if result:
-                print(
-                    json.dumps(
-                        {
-                            "event": "asr.result",
-                            "job_id": result.job_id,
-                            "text": result.text,
-                            "confidence": result.confidence,
-                            "backend": result.backend,
-                            "error": result.error,
-                        },
-                        ensure_ascii=False,
-                    ),
-                    flush=True,
+                emit(
+                    {
+                        "event": "asr.result",
+                        "job_id": result.job_id,
+                        "text": result.text,
+                        "confidence": result.confidence,
+                        "backend": result.backend,
+                        "error": result.error,
+                    }
                 )
     finally:
         capture.stop()
         asr.stop()
-        print(json.dumps({"event": "capture.stopped"}, ensure_ascii=False), flush=True)
+        emit({"event": "capture.stopped"})
 
     return 0
 

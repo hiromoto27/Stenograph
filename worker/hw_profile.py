@@ -28,9 +28,9 @@ def detect_profile() -> HardwareProfile:
     if nvidia.get("available"):
         name = nvidia.get("name") or "NVIDIA"
         vram = nvidia.get("vram_mb")
-        reason = f"RAM≈{ram_gb}GB, {name}"
+        reason = f"RAM~{ram_gb}GB, {name}"
         if vram:
-            reason += f", VRAM≈{vram}MB"
+            reason += f", VRAM~{vram}MB"
         high = (vram is not None and vram >= 8000) or (ram_gb is not None and ram_gb >= 24)
         if high:
             return HardwareProfile(
@@ -54,7 +54,7 @@ def detect_profile() -> HardwareProfile:
     if ram_gb is not None and ram_gb >= 24:
         return HardwareProfile(
             name="high",
-            reason=f"RAM≈{ram_gb}GB, no nvidia-smi — faster-whisper CPU/CUDA if torch sees GPU",
+            reason=f"RAM~{ram_gb}GB, no nvidia-smi - faster-whisper CPU/CUDA if torch sees GPU",
             asr_model_hint="faster-whisper small/base",
             max_asr_workers=1,
             prefer_cuda=True,  # try CUDA; backend falls back to CPU
@@ -64,7 +64,7 @@ def detect_profile() -> HardwareProfile:
     if intel_gpu:
         return HardwareProfile(
             name="mid",
-            reason=f"RAM≈{ram_gb}GB, Intel GPU — whisper.cpp OpenVINO or faster-whisper CPU",
+            reason=f"RAM~{ram_gb}GB, Intel GPU - whisper.cpp OpenVINO or faster-whisper CPU",
             asr_model_hint="ggml-base / ggml-small (OpenVINO first)",
             max_asr_workers=1,
             prefer_cuda=False,
@@ -74,14 +74,14 @@ def detect_profile() -> HardwareProfile:
     if ram_gb is not None and ram_gb <= 8:
         return HardwareProfile(
             name="low",
-            reason=f"RAM≈{ram_gb}GB, no discrete GPU detected",
+            reason=f"RAM~{ram_gb}GB, no discrete GPU detected",
             asr_model_hint="ggml-tiny / faster-whisper tiny (CPU)",
             max_asr_workers=1,
         )
 
     return HardwareProfile(
         name="mid",
-        reason=f"RAM≈{ram_gb}GB / unknown GPU",
+        reason=f"RAM~{ram_gb}GB / unknown GPU",
         asr_model_hint="faster-whisper base (CPU)",
         max_asr_workers=1,
     )
@@ -97,7 +97,7 @@ def _estimate_ram_gb() -> float | None:
 
 
 def _detect_intel_gpu() -> bool:
-    """True only with positive evidence — never soft-default True."""
+    """True only with positive evidence - never soft-default True."""
     if platform.system().lower() != "windows":
         return False
     try:
