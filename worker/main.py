@@ -11,7 +11,7 @@ from pathlib import Path
 
 from worker.asr_backend import describe_backend, select_backend
 from worker.asr_queue import AsrJob, AsrQueue, AsrResult
-from worker.capture import CaptureSession
+from worker.capture import CaptureSession, db_to_level, rms_to_db
 from worker.hw_profile import detect_profile
 from worker.models_catalog import (
     download_with_resume,
@@ -190,13 +190,28 @@ def main(argv: list[str] | None = None) -> int:
     asr = AsrQueue(worker_fn=run_job)
     asr.start()
 
+    def on_level(rms: float) -> None:
+        db = rms_to_db(rms)
+        emit(
+            {
+                "event": "mic.level",
+                "rms": rms,
+                "db": db,
+                "level": db_to_level(db),
+            }
+        )
+
     def on_chunk(ev) -> None:
+        rms = float(ev.rms or 0.0)
+        db = rms_to_db(rms)
         emit(
             {
                 "event": "audio.chunk",
                 "path": str(ev.path),
                 "device_id": ev.device_id,
-                "rms": ev.rms,
+                "rms": rms,
+                "db": db,
+                "level": db_to_level(db),
                 "started_at": ev.started_at,
             }
         )
@@ -204,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
         emit({"event": "asr.job", "id": job.id, "pending": asr.pending()})
 
     capture.on_chunk = on_chunk
+    capture.on_level = on_level
     capture.start()
     emit({"event": "capture.started", "device_id": args.device})
 

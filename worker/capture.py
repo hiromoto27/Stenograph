@@ -6,8 +6,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Event, Thread
 from typing import Callable
+import math
 import time
 import wave
+
+
+def rms_to_db(rms: float) -> float:
+    if rms <= 1e-12:
+        return -60.0
+    boosted = max(rms * 8.0, 1e-12)
+    return max(-60.0, min(0.0, 20.0 * math.log10(boosted)))
+
+
+def db_to_level(db: float) -> float:
+    norm = (db + 60.0) / 60.0
+    return max(0.0, min(1.0, norm ** 0.65))
 
 
 @dataclass
@@ -21,6 +34,7 @@ class AudioChunkEvent:
 class CaptureSession:
     """
     Writes fixed-length WAV segments to disk.
+    Emits on_level ~every block_sec for live VU; on_chunk only after a full segment.
     Optional on_chunk callback should only enqueue ASR — never run STT inline.
     """
 
@@ -31,14 +45,18 @@ class CaptureSession:
         sample_rate: int = 16000,
         channels: int = 1,
         segment_sec: float = 5.0,
+        block_sec: float = 0.08,
         on_chunk: Callable[[AudioChunkEvent], None] | None = None,
+        on_level: Callable[[float], None] | None = None,
     ) -> None:
         self.out_dir = out_dir
         self.device_id = device_id
         self.sample_rate = sample_rate
         self.channels = channels
         self.segment_sec = segment_sec
+        self.block_sec = block_sec
         self.on_chunk = on_chunk
+        self.on_level = on_level
         self._stop = Event()
         self._thread: Thread | None = None
 
@@ -74,6 +92,10 @@ class CaptureSession:
         if self._thread:
             self._thread.join(timeout=timeout)
 
+    def _emit_level(self, rms: float) -> None:
+        if self.on_level:
+            self.on_level(float(rms))
+
     def _run(self) -> None:
         try:
             import sounddevice as sd  # type: ignore
@@ -83,22 +105,36 @@ class CaptureSession:
             return
 
         frames_per_seg = int(self.sample_rate * self.segment_sec)
+        frames_block = max(256, int(self.sample_rate * self.block_sec))
         while not self._stop.is_set():
             started = time.time()
-            recording = sd.rec(
-                frames_per_seg,
-                samplerate=self.sample_rate,
-                channels=self.channels,
-                dtype="float32",
-                device=self.device_id,
-            )
-            sd.wait()
-            if self._stop.is_set():
+            parts: list = []
+            got = 0
+            while got < frames_per_seg and not self._stop.is_set():
+                n = min(frames_block, frames_per_seg - got)
+                recording = sd.rec(
+                    n,
+                    samplerate=self.sample_rate,
+                    channels=self.channels,
+                    dtype="float32",
+                    device=self.device_id,
+                )
+                sd.wait()
+                if self._stop.is_set():
+                    break
+                rms = float(np.sqrt(np.mean(np.square(recording)))) if recording.size else 0.0
+                self._emit_level(rms)
+                parts.append(recording)
+                got += n
+            if self._stop.is_set() or not parts:
                 break
-            rms = float(np.sqrt(np.mean(np.square(recording)))) if recording.size else 0.0
+            full = np.concatenate(parts, axis=0)
+            if full.shape[0] > frames_per_seg:
+                full = full[:frames_per_seg]
+            seg_rms = float(np.sqrt(np.mean(np.square(full)))) if full.size else 0.0
             path = self.out_dir / f"seg_{int(started * 1000)}.wav"
-            self._write_wav(path, recording)
-            ev = AudioChunkEvent(path=path, device_id=self.device_id, started_at=started, rms=rms)
+            self._write_wav(path, full)
+            ev = AudioChunkEvent(path=path, device_id=self.device_id, started_at=started, rms=seg_rms)
             if self.on_chunk:
                 self.on_chunk(ev)
 
@@ -108,7 +144,12 @@ class CaptureSession:
 
         while not self._stop.is_set():
             started = time.time()
-            time.sleep(min(0.5, self.segment_sec))
+            # emit quiet levels during stub segment
+            ticks = max(1, int(self.segment_sec / max(self.block_sec, 0.05)))
+            for _ in range(ticks):
+                if self._stop.wait(self.block_sec):
+                    break
+                self._emit_level(0.0)
             path = self.out_dir / f"seg_{int(started * 1000)}.wav"
             nframes = int(self.sample_rate * 0.1)
             with wave.open(str(path), "wb") as wf:
@@ -120,11 +161,6 @@ class CaptureSession:
                 self.on_chunk(
                     AudioChunkEvent(path=path, device_id=self.device_id, started_at=started, rms=0.0)
                 )
-            # drain remaining segment time
-            elapsed = time.time() - started
-            rem = self.segment_sec - elapsed
-            if rem > 0:
-                self._stop.wait(rem)
 
     def _write_wav(self, path: Path, recording) -> None:
         import numpy as np  # type: ignore

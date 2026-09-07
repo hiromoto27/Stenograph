@@ -20,9 +20,17 @@ TABS = ("Студия", "Карта", "Сроки", "Протокол", "Гай�
 
 
 def _db_from_rms(rms: float) -> float:
-    if rms <= 1e-9:
+    if rms <= 1e-12:
         return -60.0
-    return max(-60.0, min(0.0, 20.0 * math.log10(rms)))
+    # Boost quiet mics: treat ~0.02 RMS as near 0 dB display
+    boosted = max(rms * 8.0, 1e-12)
+    return max(-60.0, min(0.0, 20.0 * math.log10(boosted)))
+
+
+def _level_from_db(db: float) -> float:
+    # Non-linear so quiet speech still moves the bar
+    norm = (db + 60.0) / 60.0
+    return max(0.0, min(1.0, norm ** 0.65))
 
 
 def main(page: ft.Page) -> None:
@@ -44,7 +52,9 @@ def main(page: ft.Page) -> None:
     backend_label = ft.Text("ASR: —", size=11, color=MUTED)
     status = ft.Text("", size=12, color=MUTED)
     db_label = ft.Text("-60 дБ", size=12, color=MUTED)
-    level_bar = ft.ProgressBar(value=0, height=6, color=ACCENT, bgcolor=BORDER)
+    level_bar = ft.ProgressBar(value=0, height=10, color=ACCENT, bgcolor=BORDER)
+    peak_level = 0.0
+
     queue_text = ft.Text("Очередь ASR: pending 0 · готово 0", size=12, color=MUTED)
     transcript = ft.ListView(expand=True, spacing=6, auto_scroll=True)
     models_view = ft.ListView(expand=True, spacing=4)
@@ -261,12 +271,23 @@ def main(page: ft.Page) -> None:
             if mic_dd.options and not mic_dd.value:
                 mic_dd.value = mic_dd.options[0].key
             set_status("Микрофоны обновлены")
-        elif et == "audio.chunk":
+        elif et in ("audio.chunk", "mic.level"):
+            nonlocal peak_level
             rms = event.get("rms")
-            if isinstance(rms, (int, float)):
+            # Prefer worker-provided display fields if present
+            db = event.get("db")
+            level = event.get("level")
+            if isinstance(rms, (int, float)) and not isinstance(db, (int, float)):
                 db = _db_from_rms(float(rms))
-                db_label.value = f"{db:.0f} дБ"
-                level_bar.value = (db + 60.0) / 60.0
+            if isinstance(db, (int, float)):
+                db_label.value = f"{float(db):.0f} дБ"
+                if not isinstance(level, (int, float)):
+                    level = _level_from_db(float(db))
+            if isinstance(level, (int, float)):
+                lvl = max(0.0, min(1.0, float(level)))
+                # Peak hold with fast attack / slow decay for visible dynamics
+                peak_level = max(lvl, peak_level * 0.82)
+                level_bar.value = peak_level
         elif et == "asr.backend":
             name = event.get("backend") or "?"
             bits = [str(name)]
