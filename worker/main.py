@@ -13,7 +13,7 @@ from worker.asr_backend import describe_backend, select_backend
 from worker.asr_queue import AsrJob, AsrQueue, AsrResult
 from worker.capture import CaptureSession
 from worker.hw_profile import detect_profile
-from worker.models_catalog import load_index, models_root, save_index
+from worker.models_catalog import load_index, merge_with_defaults, models_root, save_index
 
 
 def data_root() -> Path:
@@ -45,23 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     profile = detect_profile()
     print(json.dumps({"event": "hw.profile", "profile": profile.__dict__}, ensure_ascii=False), flush=True)
 
-    entries = load_index()
-    # Always refresh missing url/sha from defaults for known ids
-    from worker.models_catalog import default_index, download_with_resume
-
-    defaults = {e.id: e for e in default_index()}
-    merged = []
-    seen = set()
-    for e in entries:
-        d = defaults.get(e.id)
-        if d and (not e.url or not e.sha256):
-            e = d
-        merged.append(e)
-        seen.add(e.id)
-    for mid, d in defaults.items():
-        if mid not in seen:
-            merged.append(d)
-    entries = merged
+    entries = merge_with_defaults(load_index())
     save_index(entries)
     print(
         json.dumps(
@@ -70,6 +54,20 @@ def main(argv: list[str] | None = None) -> int:
                 "root": str(models_root()),
                 "count": len(entries),
                 "ids": [e.id for e in entries],
+                "models": [
+                    {
+                        "id": e.id,
+                        "filename": e.filename,
+                        "url": e.url,
+                        "sha256": e.sha256,
+                        "size_bytes": e.size_bytes,
+                        "profile": e.profile,
+                        "engine": getattr(e, "engine", ""),
+                        "lang": getattr(e, "lang", "ru"),
+                        "notes": getattr(e, "notes", ""),
+                    }
+                    for e in entries
+                ],
             },
             ensure_ascii=False,
         ),

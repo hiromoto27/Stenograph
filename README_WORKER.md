@@ -67,6 +67,18 @@ Emits `models.download` progress events; stores under `%LOCALAPPDATA%\Stenograf\
 - **mid** (Zenbook Arc): whisper.cpp OpenVINO if available, else faster-whisper CPU.
 - **low**: tiny/base CPU.
 
+
+## Catalog sources (open)
+
+| Engine | Source | Зачем |
+|--------|--------|--------|
+| whisper.cpp ggml | HF `ggerganov/whisper.cpp` | OpenVINO / CLI STT |
+| faster-whisper | HF `Systran/faster-whisper-*` | CUDA/CPU STT (библиотека качает сама) |
+| vosk | Alphacephei `vosk-model-small-ru` | Fallback на слабых ПК |
+| silero-vad | GitHub `snakers4/silero-vad` | VAD перед ASR |
+
+Не тащим англ-only Distil-Whisper и прочий шум — только то, что нужно для RU-встреч.
+
 ## Next
 
 1. Fill real model URLs/sha256 in catalog + downloader UX.
