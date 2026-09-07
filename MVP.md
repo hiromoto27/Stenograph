@@ -70,3 +70,32 @@
 3. Запись + mic picker + очередь на диск.
 4. whisper.cpp OpenVINO + catalog/sha256.
 5. Протокол + DOCX/HTML экспорт.
+
+## Этап 2 — задачи / «Куда отнести?» (контракт)
+
+После стабильной Студии (mic → ASR → протокол).
+
+### События (JSON, worker ↔ UI)
+
+1. `asr.result` — как сейчас (`job_id`, `text`, `confidence`, `backend`, `error`).
+2. `task.suggest` — ответ классификатора на реплику:
+   - `utterance_id` / `job_id`
+   - `text`
+   - `candidates`: `[{ "task_id", "title", "score" }]` (top-k, score 0..1)
+   - `allow_none`: true
+   - `allow_new`: true
+3. UI показывает блок «Куда отнести?» (как в макете Grok).
+4. Пользователь выбирает → UI шлёт:
+   - `task.assign` — `{ utterance_id, task_id }`
+   - или `task.create` — `{ utterance_id, title }` → worker создаёт задачу и назначает
+   - или `task.skip` — не относить
+5. Опционально из речи «напомни…»:
+   - `reminder.set` — `{ task_id, at_iso }` — **только** в выбранную/созданную задачу (баг из демо-ролика: не в чужую карточку).
+6. Позже карта: `task.link` — `{ from_id, to_id, keywords[] }`.
+
+### Правила
+
+- ASR не классифицирует жёстко: при низкой уверенности / близких top-2 — всегда UI-уточнение.
+- Профили задач (positive/negative keywords + embeddings) растут с ответами пользователя.
+- Пока CUDA/`cublas` нет — CPU `base`; GPU `small` после toolkit.
+
