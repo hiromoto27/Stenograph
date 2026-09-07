@@ -13,7 +13,7 @@ from typing import Any
 import flet as ft
 
 from ui.export_protocol import ProtocolLine, default_export_dir, export_docx, export_html
-from ui.theme import ACCENT, ACCENT_FG, BG, BORDER, MUTED, REC, REC_FG, SURFACE, SURFACE2, SURFACE3, TEXT, page_theme
+from ui.theme import ACCENT, ACCENT_FG, BG, BORDER, MUTED, OK, REC, REC_FG, SURFACE, SURFACE2, SURFACE3, TEXT, page_theme
 from ui.worker_client import WorkerClient
 
 TABS = ("Студия", "Карта", "Сроки", "Протокол", "Гайды", "Ещё")
@@ -386,8 +386,36 @@ def main(page: ft.Page) -> None:
                 if conf is not None:
                     prefix = f"{prefix} · conf={conf}" if prefix else f"conf={conf}"
                 append_protocol(prefix, text, job_id=job_id, backend=str(backend))
-                # Prefer worker task.suggest; until then keyword stub for UI wiring
-                local_stub_suggest(job_id, text)
+                # task.suggest comes from worker (LOGIC.md); stub only as fallback if absent
+        elif et == "task.suggest":
+            uid = str(event.get("utterance_id") or event.get("job_id") or "")
+            text_value = str(event.get("text") or "")
+            cands = event.get("candidates") or []
+            if event.get("auto") and cands:
+                set_status(f"Авто → {cands[0].get('title')} ({cands[0].get('score')})")
+            elif event.get("intent") and event["intent"].get("type") == "create_task":
+                show_suggest(uid, text_value, cands)
+                if event["intent"].get("title"):
+                    new_task_field.value = event["intent"]["title"]
+            else:
+                show_suggest(uid, text_value, cands)
+                if event.get("ambiguous") and event.get("reason"):
+                    classify_hint.value = f"Куда отнести? ({event.get('reason')})"
+                else:
+                    classify_hint.value = "Куда отнести?"
+            page.update()
+        elif et == "task.assigned":
+            if event.get("auto"):
+                set_status(f"Авто-назначено → {event.get('task_id')} · score={event.get('score')}")
+            classify_panel.visible = False
+            page.update()
+        elif et == "task.created":
+            task = event.get("task") or {}
+            if task.get("title"):
+                tasks_sidebar.append({"task_id": task.get("task_id"), "title": task.get("title")})
+                refresh_tasks_sidebar()
+            set_status(f"Задача создана: {task.get('title')}")
+            page.update()
         elif et == "models.list":
             models = event.get("models") or []
             if models:
