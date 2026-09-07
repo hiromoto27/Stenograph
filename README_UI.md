@@ -2,15 +2,16 @@
 
 UI shell for Windows MVP. Consumes worker JSON-line events on stdout:
 
-`hw.profile` · `models.list` · `mic.list` · `audio.chunk` · `asr.job` · `asr.result`
+`hw.profile` · `models.list` · `models.download` · `mic.list` · `audio.chunk` · `asr.backend` · `asr.job` · `asr.result`
 
 ## Screens (MVP)
 
 - Mic picker (+ refresh via `worker.main --list-mics`)
 - Start / Stop recording (spawns `python -m worker.main`)
-- ASR queue counters
+- ASR backend + queue counters + confidence in protocol
+- Models catalog (from `worker.models_catalog` / `models.list`; download when url+sha256 set)
 - Live protocol from `asr.result`
-- DOCX / HTML export stubs (post-process later)
+- DOCX / HTML export (offline TOC + anchors) → `%LOCALAPPDATA%\Stenograf\exports`
 
 ## Run (dev)
 
@@ -27,14 +28,9 @@ python -m ui.main
 ```
 Stenograph/
   worker/          # Разработчик 1
-  ui/              # Разработчик 2 (this)
+  ui/              # Разработчик 2
   requirements-ui.txt
   README_UI.md
 ```
 
-Interim IPC only — later replace with a dedicated channel if needed.
-
-## Export
-
-`ui/export_protocol.py` — offline DOCX (`python-docx`) and interactive HTML (TOC + anchors).
-Default output: `%LOCALAPPDATA%\Stenograf\exports` on Windows, else `~/.local/share/Stenograf/exports`.
+Interim IPC: JSON lines on stdout. Download buttons stay disabled until catalog has real url/sha256.

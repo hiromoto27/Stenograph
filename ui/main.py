@@ -1,31 +1,36 @@
-"""Flet UI for Stenograph MVP — mic picker, ASR queue, protocol view, export stubs."""
+"""Flet UI for Stenograph MVP — mic picker, ASR queue, protocol, models, export."""
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 import flet as ft
 
-from ui.export_protocol import ProtocolLine, export_docx, export_html, default_export_dir
+from ui.export_protocol import ProtocolLine, default_export_dir, export_docx, export_html
 from ui.worker_client import WorkerClient
 
 
 def main(page: ft.Page) -> None:
     page.title = "Stenograf"
-    page.window.width = 960
-    page.window.height = 720
+    page.window.width = 1000
+    page.window.height = 780
     page.padding = 16
 
     mics: list[dict[str, Any]] = []
     protocol_entries: list[ProtocolLine] = []
+    model_rows: list[dict[str, Any]] = []
     queue_pending = 0
     queue_done = 0
     hw_label = ft.Text("Профиль железа: —", size=12)
     backend_label = ft.Text("ASR backend: —", size=12)
+    models_root_label = ft.Text("Модели: —", size=12)
     status = ft.Text("Worker: остановлен", size=12)
     protocol_view = ft.ListView(expand=True, spacing=4, auto_scroll=True)
+    models_view = ft.ListView(height=140, spacing=4)
     queue_text = ft.Text("Очередь ASR: pending 0 · готово 0", size=13)
+    download_progress = ft.ProgressBar(value=0, visible=False)
 
     mic_dd = ft.Dropdown(
         label="Микрофон",
@@ -44,8 +49,113 @@ def main(page: ft.Page) -> None:
     def refresh_queue_label() -> None:
         queue_text.value = f"Очередь ASR: pending {queue_pending} · готово {queue_done}"
 
+    def render_models() -> None:
+        models_view.controls.clear()
+        if not model_rows:
+            models_view.controls.append(ft.Text("Каталог пуст — обнови список или дождись models.list", size=12))
+            page.update()
+            return
+        for row in model_rows:
+            mid = str(row.get("id") or "?")
+            profile = str(row.get("profile") or "")
+            filename = str(row.get("filename") or "")
+            has_url = bool(row.get("url"))
+            has_sha = bool(row.get("sha256"))
+            local = row.get("local_present")
+            bits = [mid]
+            if profile:
+                bits.append(f"profile={profile}")
+            if filename:
+                bits.append(filename)
+            if local is True:
+                bits.append("локально ✓")
+            elif local is False:
+                bits.append("нет файла")
+            ready = "готово к скачиванию" if has_url and has_sha else "нет url/sha256"
+            bits.append(ready)
+
+            def make_dl(model_id: str):
+                def _(_: ft.ControlEvent) -> None:
+                    download_model(model_id)
+
+                return _
+
+            models_view.controls.append(
+                ft.Row(
+                    [
+                        ft.Text(" · ".join(bits), size=12, expand=True),
+                        ft.OutlinedButton(
+                            "Скачать",
+                            on_click=make_dl(mid),
+                            disabled=not (has_url and has_sha),
+                        ),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                )
+            )
+        page.update()
+
+    def load_models_from_disk() -> None:
+        nonlocal model_rows
+        try:
+            if str(repo_root) not in sys.path:
+                sys.path.insert(0, str(repo_root))
+            from worker.models_catalog import load_index, models_root  # type: ignore
+
+            entries = load_index()
+            root = models_root()
+            model_rows = []
+            for e in entries:
+                present = (root / e.filename).exists() if e.filename else False
+                model_rows.append(
+                    {
+                        "id": e.id,
+                        "filename": e.filename,
+                        "url": e.url,
+                        "sha256": e.sha256,
+                        "size_bytes": e.size_bytes,
+                        "profile": e.profile,
+                        "local_present": present,
+                    }
+                )
+            models_root_label.value = f"Модели: {root} · {len(model_rows)} шт."
+            render_models()
+            status.value = "Каталог моделей обновлён с диска"
+        except Exception as exc:  # noqa: BLE001
+            status.value = f"Каталог моделей: {exc}"
+        page.update()
+
+    def download_model(model_id: str) -> None:
+        try:
+            if str(repo_root) not in sys.path:
+                sys.path.insert(0, str(repo_root))
+            from worker.models_catalog import download_with_resume, load_index  # type: ignore
+
+            entries = {e.id: e for e in load_index()}
+            entry = entries.get(model_id)
+            if not entry:
+                status.value = f"Модель {model_id} не найдена в index"
+                page.update()
+                return
+            if not entry.url or not entry.sha256:
+                status.value = f"{model_id}: в каталоге пустые url/sha256 — ждём заполнения worker"
+                page.update()
+                return
+            download_progress.visible = True
+            download_progress.value = None  # indeterminate
+            status.value = f"Скачивание {model_id} (ниже приоритета ASR)…"
+            page.update()
+            path = download_with_resume(entry)
+            download_progress.visible = False
+            status.value = f"Скачано: {path}"
+            load_models_from_disk()
+        except Exception as exc:  # noqa: BLE001
+            download_progress.visible = False
+            status.value = f"Ошибка скачивания: {exc}"
+            page.update()
+
     def on_event(event: dict[str, Any]) -> None:
-        nonlocal queue_pending, queue_done, mics
+        nonlocal queue_pending, queue_done, mics, model_rows
         et = event.get("event")
         if et == "hw.profile":
             prof = event.get("profile") or {}
@@ -79,7 +189,11 @@ def main(page: ft.Page) -> None:
             rms = event.get("rms")
             path = event.get("path") or ""
             if rms is not None:
-                status.value = f"Worker: запись… rms={rms:.3f}" if isinstance(rms, (int, float)) else f"Worker: запись… {path}"
+                status.value = (
+                    f"Worker: запись… rms={rms:.3f}"
+                    if isinstance(rms, (int, float))
+                    else f"Worker: запись… {path}"
+                )
         elif et == "asr.backend":
             name = event.get("backend") or event.get("name") or "?"
             detail = event.get("detail") or event.get("reason") or ""
@@ -104,7 +218,12 @@ def main(page: ft.Page) -> None:
             job_id = str(event.get("job_id") or "")
             backend = event.get("backend") or ""
             if err:
-                append_protocol(job_id or "err", f"ERROR ({backend}): {err}", job_id=job_id, backend=str(backend))
+                append_protocol(
+                    job_id or "err",
+                    f"ERROR ({backend}): {err}",
+                    job_id=job_id,
+                    backend=str(backend),
+                )
             elif text:
                 conf = event.get("confidence")
                 prefix = job_id
@@ -114,8 +233,31 @@ def main(page: ft.Page) -> None:
                     prefix = f"{prefix} · conf={conf}" if prefix else f"conf={conf}"
                 append_protocol(prefix, text, job_id=job_id, backend=str(backend))
         elif et == "models.list":
-            models = event.get("models") or []
-            status.value = f"Модели: {len(models)} в каталоге"
+            root = event.get("root") or ""
+            ids = event.get("ids") or []
+            count = event.get("count")
+            models_root_label.value = f"Модели: {root or '—'} · {count if count is not None else len(ids)} шт."
+            # Prefer full rows from disk; fall back to ids from event
+            load_models_from_disk()
+            if not model_rows and ids:
+                model_rows = [{"id": i, "url": "", "sha256": "", "profile": "", "filename": ""} for i in ids]
+                render_models()
+        elif et == "models.download":
+            mid = event.get("id") or "?"
+            prog = event.get("progress")
+            if prog is None:
+                download_progress.visible = True
+                download_progress.value = None
+            else:
+                download_progress.visible = True
+                try:
+                    download_progress.value = float(prog)
+                except (TypeError, ValueError):
+                    download_progress.value = None
+            status.value = f"Скачивание {mid}: {prog if prog is not None else '…'}"
+            if event.get("done"):
+                download_progress.visible = False
+                load_models_from_disk()
         page.update()
 
     repo_root = Path(__file__).resolve().parents[1]
@@ -144,7 +286,6 @@ def main(page: ft.Page) -> None:
         page.update()
         import os
         import subprocess
-        import sys
 
         env = os.environ.copy()
         env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
@@ -190,11 +331,13 @@ def main(page: ft.Page) -> None:
                 ft.Text("Stenograf — MVP UI", size=22, weight=ft.FontWeight.BOLD),
                 hw_label,
                 backend_label,
+                models_root_label,
                 status,
+                download_progress,
                 ft.Row(
                     [
                         mic_dd,
-                        ft.OutlinedButton("Обновить", on_click=refresh_mics),
+                        ft.OutlinedButton("Обновить mic", on_click=refresh_mics),
                     ],
                     wrap=True,
                 ),
@@ -208,6 +351,19 @@ def main(page: ft.Page) -> None:
                     wrap=True,
                 ),
                 queue_text,
+                ft.Row(
+                    [
+                        ft.Text("Каталог моделей", size=16, weight=ft.FontWeight.W_600),
+                        ft.OutlinedButton("Обновить каталог", on_click=lambda e: load_models_from_disk()),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                ft.Container(
+                    content=models_view,
+                    border=ft.border.all(1, ft.Colors.OUTLINE),
+                    border_radius=8,
+                    padding=8,
+                ),
                 ft.Text("Протокол", size=16, weight=ft.FontWeight.W_600),
                 ft.Container(
                     content=protocol_view,
@@ -221,6 +377,7 @@ def main(page: ft.Page) -> None:
         )
     )
     refresh_mics(None)  # type: ignore[arg-type]
+    load_models_from_disk()
 
 
 if __name__ == "__main__":
