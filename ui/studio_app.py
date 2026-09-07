@@ -386,7 +386,7 @@ def main(page: ft.Page) -> None:
                 if conf is not None:
                     prefix = f"{prefix} · conf={conf}" if prefix else f"conf={conf}"
                 append_protocol(prefix, text, job_id=job_id, backend=str(backend))
-                # task.suggest comes from worker (LOGIC.md); stub only as fallback if absent
+                # classification via worker task.suggest (LOGIC.md)
         elif et == "task.suggest":
             uid = str(event.get("utterance_id") or event.get("job_id") or "")
             text_value = str(event.get("text") or "")
@@ -602,87 +602,6 @@ def main(page: ft.Page) -> None:
         ],
         spacing=8,
     )
-
-    def local_stub_suggest(job_id: str, text_value: str) -> None:
-        """Until worker emits task.suggest — keyword stub against sidebar tasks."""
-        low = text_value.lower()
-        scored = []
-        for t in tasks_sidebar:
-            title = t["title"].lower()
-            words = [w for w in title.replace("ё", "е").split() if len(w) > 3]
-            hits = sum(1 for w in words if w in low.replace("ё", "е"))
-            score = 0.15 + 0.25 * hits
-            if "кухн" in low and "кухн" in title:
-                score = max(score, 0.49)
-            if "отчёт" in low or "отчет" in low:
-                if "отчёт" in title or "отчет" in title:
-                    score = max(score, 0.36)
-            if "напомн" in low:
-                score = max(score, 0.2)
-            scored.append({"task_id": t["task_id"], "title": t["title"], "score": min(0.95, score)})
-        scored.sort(key=lambda x: -x["score"])
-        show_suggest(job_id, text_value, scored[:4])
-
-
-
-    def refresh_mics(_: ft.ControlEvent | None = None) -> None:
-        if not (repo_root / "worker" / "main.py").exists():
-            mic_dd.options = [ft.dropdown.Option(key="default", text="Микрофон по умолчанию")]
-            mic_dd.value = "default"
-            set_status("Демо без worker/")
-            return
-        env = os.environ.copy()
-        env["PYTHONPATH"] = str(repo_root) + os.pathsep + env.get("PYTHONPATH", "")
-        try:
-            out = subprocess.check_output(
-                [sys.executable, "-m", "worker.main", "--list-mics"],
-                cwd=str(repo_root),
-                env=env,
-                text=True,
-                timeout=30,
-            )
-            for line in out.splitlines():
-                line = line.strip()
-                if line.startswith("{"):
-                    try:
-                        on_event(json.loads(line))
-                    except json.JSONDecodeError:
-                        pass
-        except Exception as exc:  # noqa: BLE001
-            set_status(f"mic list: {exc}")
-
-    def start_rec(_: ft.ControlEvent) -> None:
-        nonlocal meeting_open
-        meeting_open = True
-        mid = model_dd.value or selected_model_id
-        rec_dot.visible = True
-        rec_label.visible = True
-        set_status(f"Запись… модель={mid or 'auto'}")
-        save_ui_settings(device_id=mic_dd.value, model_id=mid)
-        client.start(mic_id=mic_dd.value, segment_sec=3.0, model_id=mid, seconds=0)
-        page.update()
-
-    def stop_rec(_: ft.ControlEvent) -> None:
-        client.stop()
-        rec_dot.visible = False
-        rec_label.visible = False
-        set_status("Остановлено")
-        page.update()
-
-    def do_export(kind: str) -> None:
-        if not protocol_entries:
-            set_status("Протокол пуст")
-            return
-        out = default_export_dir()
-        try:
-            path = (
-                export_docx(protocol_entries, out / "protocol-latest.docx")
-                if kind == "DOCX"
-                else export_html(protocol_entries, out / "protocol-latest.html")
-            )
-            set_status(f"Экспорт {kind}: {path}")
-        except Exception as exc:  # noqa: BLE001
-            set_status(f"Экспорт ошибка: {exc}")
 
     def stub_view(title: str, hint: str) -> ft.Control:
         return ft.Column(
