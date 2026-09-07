@@ -346,9 +346,15 @@ def main(page: ft.Page) -> None:
                 download_progress.visible = False
                 status.value = f"Ошибка скачивания {mid}: {event.get('error')}"
             else:
+                percent = event.get("percent")
                 downloaded = event.get("downloaded")
                 total = event.get("total")
-                if isinstance(downloaded, (int, float)) and isinstance(total, (int, float)) and total > 0:
+                if isinstance(percent, (int, float)):
+                    download_progress.value = max(0.0, min(1.0, float(percent) / 100.0))
+                    status.value = f"Скачивание {mid}: {float(percent):.0f}%"
+                    if isinstance(downloaded, (int, float)) and isinstance(total, (int, float)) and total > 0:
+                        status.value += f" ({downloaded}/{total})"
+                elif isinstance(downloaded, (int, float)) and isinstance(total, (int, float)) and total > 0:
                     download_progress.value = float(downloaded) / float(total)
                     pct = 100.0 * float(downloaded) / float(total)
                     status.value = f"Скачивание {mid}: {pct:.0f}% ({downloaded}/{total})"
