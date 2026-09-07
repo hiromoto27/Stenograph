@@ -19,6 +19,32 @@ from ui.worker_client import WorkerClient
 TABS = ("Студия", "Карта", "Сроки", "Протокол", "Гайды", "Ещё")
 
 
+def settings_path() -> Path:
+    local = os.environ.get("LOCALAPPDATA")
+    if local:
+        root = Path(local) / "Stenograf"
+    else:
+        root = Path.home() / ".stenograf"
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "ui_settings.json"
+
+
+def load_ui_settings() -> dict:
+    path = settings_path()
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_ui_settings(**kwargs: Any) -> None:
+    data = load_ui_settings()
+    data.update({k: v for k, v in kwargs.items() if v is not None})
+    settings_path().write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _db_from_rms(rms: float) -> float:
     if rms <= 1e-12:
         return -60.0
@@ -120,6 +146,7 @@ def main(page: ft.Page) -> None:
     model_rec_label = ft.Text("Рекомендация: —", size=11, color=MUTED)
     selected_model_id: str | None = None
     recommended_model_id: str | None = None
+    ui_settings = load_ui_settings()
 
     topic_field = ft.TextField(
         label="Тема встречи",
@@ -291,7 +318,11 @@ def main(page: ft.Page) -> None:
                 ft.dropdown.Option(key=str(d.get("id", i)), text=str(d.get("name") or f"Mic {i}"))
                 for i, d in enumerate(devices)
             ]
-            if mic_dd.options and not mic_dd.value:
+            saved = str(ui_settings.get("device_id") or "")
+            keys = [str(o.key) for o in mic_dd.options]
+            if saved and saved in keys:
+                mic_dd.value = saved
+            elif mic_dd.options and not mic_dd.value:
                 mic_dd.value = mic_dd.options[0].key
             set_status("Микрофоны обновлены")
         elif et in ("audio.chunk", "mic.level"):
@@ -392,7 +423,12 @@ def main(page: ft.Page) -> None:
             label = f"{mid} [{eng}]{loc}{mark}"
             opts.append(ft.dropdown.Option(key=mid, text=label))
         model_dd.options = opts
-        if recommended_model_id and any(o.key == recommended_model_id for o in opts):
+        saved_model = str(ui_settings.get("model_id") or "")
+        keys = [str(o.key) for o in opts]
+        if saved_model and saved_model in keys:
+            model_dd.value = saved_model
+            selected_model_id = saved_model
+        elif recommended_model_id and recommended_model_id in keys and not model_dd.value:
             model_dd.value = recommended_model_id
             selected_model_id = recommended_model_id
         elif opts and not model_dd.value:
@@ -403,10 +439,17 @@ def main(page: ft.Page) -> None:
     def on_model_pick(e: ft.ControlEvent) -> None:
         nonlocal selected_model_id
         selected_model_id = model_dd.value
+        save_ui_settings(model_id=selected_model_id, device_id=mic_dd.value)
         client.send({"event": "asr.model", "model_id": selected_model_id})
         set_status(f"Модель: {selected_model_id}")
 
     model_dd.on_change = on_model_pick
+
+    def on_mic_pick(e: ft.ControlEvent) -> None:
+        save_ui_settings(device_id=mic_dd.value, model_id=model_dd.value or selected_model_id)
+        set_status(f"Микрофон сохранён: {mic_dd.value}")
+
+    mic_dd.on_change = on_mic_pick
 
 
 
@@ -545,7 +588,8 @@ def main(page: ft.Page) -> None:
         meeting_open = True
         mid = model_dd.value or selected_model_id
         set_status(f"Запись… модель={mid or 'auto'}")
-        client.start(mic_id=mic_dd.value, segment_sec=3.0, model_id=mid)
+        save_ui_settings(device_id=mic_dd.value, model_id=mid)
+        client.start(mic_id=mic_dd.value, segment_sec=3.0, model_id=mid, seconds=0)
 
     def stop_rec(_: ft.ControlEvent) -> None:
         client.stop()
