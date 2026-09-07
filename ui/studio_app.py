@@ -14,6 +14,7 @@ from typing import Any
 import flet as ft
 
 from ui.export_protocol import ProtocolLine, default_export_dir, export_docx, export_html, export_package
+from ui.map_view import MapView
 from ui.theme import ACCENT, ACCENT_FG, BG, BORDER, MUTED, OK, REC, REC_FG, SURFACE, SURFACE2, SURFACE3, TEXT, page_theme
 from ui.browser_stt import (
     build_webview,
@@ -542,6 +543,8 @@ def main(page: ft.Page) -> None:
         elif et == "meeting.pause_suggest":
             pause_nudge.visible = True
             page.update()
+        elif et == "map.state":
+            map_view.set_state(event.get("nodes") or [], event.get("edges") or [])
         elif et == "models.list":
             models = event.get("models") or []
             if models:
@@ -570,6 +573,16 @@ def main(page: ft.Page) -> None:
         page.update()
 
     client = WorkerClient(worker_cwd=repo_root, on_event=on_event)
+
+    def _map_link(task_a: str, task_b: str) -> None:
+        client.send({"event": "task.link", "task_a": task_a, "task_b": task_b})
+        set_status(f"Связаны: {task_a} ↔ {task_b}")
+
+    def _map_hide_pair(task_a: str, task_b: str) -> None:
+        client.send({"event": "task.hide_pair", "task_a": task_a, "task_b": task_b})
+        set_status(f"Связь скрыта: {task_a} ↔ {task_b}")
+
+    map_view = MapView(on_link=_map_link, on_hide_pair=_map_hide_pair)
 
     def refresh_model_dropdown() -> None:
         nonlocal selected_model_id
@@ -1065,7 +1078,9 @@ def main(page: ft.Page) -> None:
         elif active_tab == "Ещё":
             body.content = settings_view()
         elif active_tab == "Карта":
-            body.content = stub_view("Карта связей", "Перетащите задачу — связь. Panzoom позже.")
+            body.content = map_view.control()
+            if client.running:
+                client.send({"event": "map.request"})
         elif active_tab == "Сроки":
             body.content = stub_view("Напоминания", "Календарь + .ics — каркас.")
         elif active_tab == "Протокол":

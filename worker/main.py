@@ -14,8 +14,10 @@ from worker.asr_queue import AsrJob, AsrQueue, AsrResult
 from worker.capture import CaptureSession, db_to_level, rms_to_db
 from worker.hw_profile import detect_profile
 from worker.classifier import apply_feedback, suggest as classify_suggest
+from worker.essence import task_essence
+from worker.graph import build_edges
 from worker.meetings import MeetingTracker
-from worker.tasks_store import create_task, load_tasks, save_tasks
+from worker.tasks_store import create_task, hide_pair, link_tasks, load_tasks, save_tasks
 from worker.models_catalog import (
     download_with_resume,
     load_index,
@@ -407,10 +409,35 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     tasks = load_tasks()
-    emit({"event": "tasks.list", "tasks": [
-        {"task_id": t["task_id"], "title": t["title"], "hits": t.get("hits", 0), "misses": t.get("misses", 0)}
-        for t in tasks
-    ]})
+
+    def emit_tasks_list() -> None:
+        emit({"event": "tasks.list", "tasks": [
+            {
+                "task_id": t["task_id"],
+                "title": t["title"],
+                "hits": t.get("hits", 0),
+                "misses": t.get("misses", 0),
+                "remind_at": t.get("remind_at"),
+                "due_at": t.get("due_at"),
+            }
+            for t in tasks
+        ]})
+
+    def emit_map_state() -> None:
+        # LOGIC.md §10 — essence per node, auto-edges minus hidden_pairs + manual links.
+        emit(
+            {
+                "event": "map.state",
+                "nodes": [
+                    {"task_id": t["task_id"], "title": t["title"], "essence": task_essence(t)}
+                    for t in tasks
+                ],
+                "edges": build_edges(tasks),
+            }
+        )
+
+    emit_tasks_list()
+    emit_map_state()
 
     pending_suggest: dict[str, dict] = {}
     meetings = MeetingTracker()
@@ -493,16 +520,15 @@ def main(argv: list[str] | None = None) -> int:
                             "score": top["score"],
                         }
                     )
+                    emit_map_state()
             return
         if et == "asr.model":
             emit({"event": "asr.model", "model_id": cmd.get("model_id"), "note": "restart worker to apply"})
             return
         if et == "tasks.reload":
             tasks = load_tasks()
-            emit({"event": "tasks.list", "tasks": [
-                {"task_id": t["task_id"], "title": t["title"], "hits": t.get("hits", 0), "misses": t.get("misses", 0)}
-                for t in tasks
-            ]})
+            emit_tasks_list()
+            emit_map_state()
             return
         if et == "meeting.start":
             meeting = meetings.start(str(cmd.get("title") or ""))
@@ -511,6 +537,17 @@ def main(argv: list[str] | None = None) -> int:
         if et == "meeting.end":
             meeting = meetings.end()
             emit({"event": "meeting.end", **(meeting.to_dict() if meeting else {"meeting_id": None})})
+            return
+        if et == "map.request":
+            emit_map_state()
+            return
+        if et == "task.link":
+            link_tasks(tasks, str(cmd.get("task_a") or ""), str(cmd.get("task_b") or ""))
+            emit_map_state()
+            return
+        if et == "task.hide_pair":
+            hide_pair(tasks, str(cmd.get("task_a") or ""), str(cmd.get("task_b") or ""))
+            emit_map_state()
             return
 
         meta = pending_suggest.pop(uid, {})
@@ -522,12 +559,14 @@ def main(argv: list[str] | None = None) -> int:
             mode = "auto" if meta.get("auto") else "ask"
             apply_feedback(tasks, chosen_id=tid, utterance=text_u, suggested_ids=suggested_ids, mode=mode)
             emit({"event": "task.assigned", "utterance_id": uid, "task_id": tid})
+            emit_map_state()
         elif et == "task.create":
             title = str(cmd.get("title") or "Новая задача")
             task = create_task(tasks, title)
             tasks = load_tasks()
             apply_feedback(tasks, chosen_id=task["task_id"], utterance=text_u, suggested_ids=suggested_ids, mode="ask")
             emit({"event": "task.created", "utterance_id": uid, "task": {"task_id": task["task_id"], "title": task["title"]}})
+            emit_map_state()
         elif et == "task.skip":
             emit({"event": "task.skipped", "utterance_id": uid})
 
@@ -578,6 +617,7 @@ def main(argv: list[str] | None = None) -> int:
                             "auto": True,
                             "score": top["score"],
                         })
+                        emit_map_state()
     finally:
         capture.stop()
         asr.stop()
