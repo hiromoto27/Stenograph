@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 import math
 import os
 import subprocess
@@ -54,9 +55,9 @@ def _db_from_rms(rms: float) -> float:
 
 
 def _level_from_db(db: float) -> float:
-    # Non-linear so quiet speech still moves the bar
+    # Preview-aligned: (db+60)/60; slight display boost applied in VU paint
     norm = (db + 60.0) / 60.0
-    return max(0.0, min(1.0, norm ** 0.65))
+    return max(0.0, min(1.0, norm))
 
 
 def main(page: ft.Page) -> None:
@@ -80,8 +81,25 @@ def main(page: ft.Page) -> None:
     rec_dot = ft.Container(width=8, height=8, border_radius=4, bgcolor=REC, visible=False)
     rec_label = ft.Text("Идёт запись", size=12, color=REC, visible=False)
     db_label = ft.Text("-60 дБ", size=12, color=MUTED)
-    level_bar = ft.ProgressBar(value=0, height=10, color=ACCENT, bgcolor=BORDER)
+    VU_BARS = 64
+    VU_H = 40
+    vu_history: deque[float] = deque([0.0] * VU_BARS, maxlen=VU_BARS)
+    vu_cells = [
+        ft.Container(width=4, height=2, bgcolor=MUTED, border_radius=1)
+        for _ in range(VU_BARS)
+    ]
+    vu_row = ft.Row(vu_cells, spacing=1, alignment=ft.MainAxisAlignment.CENTER, vertical_alignment=ft.CrossAxisAlignment.END, height=VU_H + 4)
+    recording = False
     peak_level = 0.0
+
+    def paint_vu() -> None:
+        active = recording
+        for i, cell in enumerate(vu_cells):
+            lvl = vu_history[i] if i < len(vu_history) else 0.0
+            # visible height boost (~preview *3.2 feel on normalized level)
+            h = max(2, int(min(1.0, lvl * 1.35) * VU_H))
+            cell.height = h
+            cell.bgcolor = REC if active and lvl > 0.02 else (SURFACE3 if lvl > 0.02 else BORDER)
 
     queue_text = ft.Text("Очередь ASR: pending 0 · готово 0", size=12, color=MUTED)
     transcript = ft.ListView(expand=True, spacing=6, auto_scroll=True)
@@ -339,7 +357,6 @@ def main(page: ft.Page) -> None:
         elif et in ("audio.chunk", "mic.level"):
             nonlocal peak_level
             rms = event.get("rms")
-            # Prefer worker-provided display fields if present
             db = event.get("db")
             level = event.get("level")
             if isinstance(rms, (int, float)) and not isinstance(db, (int, float)):
@@ -350,9 +367,9 @@ def main(page: ft.Page) -> None:
                     level = _level_from_db(float(db))
             if isinstance(level, (int, float)):
                 lvl = max(0.0, min(1.0, float(level)))
-                # Peak hold with fast attack / slow decay for visible dynamics
                 peak_level = max(lvl, peak_level * 0.82)
-                level_bar.value = peak_level
+                vu_history.append(peak_level)
+                paint_vu()
         elif et == "asr.backend":
             name = event.get("backend") or "?"
             bits = [str(name)]
@@ -604,9 +621,10 @@ def main(page: ft.Page) -> None:
     )
 
     def start_rec(_: ft.ControlEvent) -> None:
-        nonlocal meeting_open
+        nonlocal meeting_open, recording
         meeting_open = True
         mid = model_dd.value or selected_model_id
+        recording = True
         rec_dot.visible = True
         rec_label.visible = True
         set_status(f"Запись… модель={mid or 'auto'}")
@@ -615,9 +633,12 @@ def main(page: ft.Page) -> None:
         page.update()
 
     def stop_rec(_: ft.ControlEvent) -> None:
+        nonlocal recording
+        recording = False
         client.stop()
         rec_dot.visible = False
         rec_label.visible = False
+        paint_vu()
         set_status("Остановлено")
         page.update()
 
@@ -698,7 +719,7 @@ def main(page: ft.Page) -> None:
                                             db_label,
                                         ]
                                     ),
-                                    level_bar,
+                                    vu_row,
                                 ],
                                 spacing=8,
                             ),
