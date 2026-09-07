@@ -22,6 +22,7 @@ def main(page: ft.Page) -> None:
     queue_pending = 0
     queue_done = 0
     hw_label = ft.Text("Профиль железа: —", size=12)
+    backend_label = ft.Text("ASR backend: —", size=12)
     status = ft.Text("Worker: остановлен", size=12)
     protocol_view = ft.ListView(expand=True, spacing=4, auto_scroll=True)
     queue_text = ft.Text("Очередь ASR: pending 0 · готово 0", size=13)
@@ -79,6 +80,10 @@ def main(page: ft.Page) -> None:
             path = event.get("path") or ""
             if rms is not None:
                 status.value = f"Worker: запись… rms={rms:.3f}" if isinstance(rms, (int, float)) else f"Worker: запись… {path}"
+        elif et == "asr.backend":
+            name = event.get("backend") or event.get("name") or "?"
+            detail = event.get("detail") or event.get("reason") or ""
+            backend_label.value = f"ASR backend: {name}" + (f" · {detail}" if detail else "")
         elif et == "asr.job":
             pending = event.get("pending")
             if isinstance(pending, int):
@@ -101,9 +106,12 @@ def main(page: ft.Page) -> None:
             if err:
                 append_protocol(job_id or "err", f"ERROR ({backend}): {err}", job_id=job_id, backend=str(backend))
             elif text:
+                conf = event.get("confidence")
                 prefix = job_id
                 if backend:
                     prefix = f"{job_id} · {backend}" if job_id else str(backend)
+                if conf is not None:
+                    prefix = f"{prefix} · conf={conf}" if prefix else f"conf={conf}"
                 append_protocol(prefix, text, job_id=job_id, backend=str(backend))
         elif et == "models.list":
             models = event.get("models") or []
@@ -181,6 +189,7 @@ def main(page: ft.Page) -> None:
             [
                 ft.Text("Stenograf — MVP UI", size=22, weight=ft.FontWeight.BOLD),
                 hw_label,
+                backend_label,
                 status,
                 ft.Row(
                     [
