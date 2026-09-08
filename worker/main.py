@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 
+from worker.archive_store import append_utterance, export_json, import_json, load_archive, set_task as archive_set_task
 from worker.asr_backend import describe_backend, select_backend
 from worker.asr_queue import AsrJob, AsrQueue, AsrResult
 from worker.capture import CaptureSession, db_to_level, rms_to_db
@@ -18,6 +19,7 @@ from worker.essence import task_essence
 from worker.graph import build_edges
 from worker.meetings import MeetingTracker
 from worker.ics_export import export_ics
+from worker.search import search_archive
 from worker.tasks_store import create_task, hide_pair, level_label, link_tasks, load_tasks, save_tasks, snooze_task
 from worker.models_catalog import (
     download_with_resume,
@@ -439,6 +441,9 @@ def main(argv: list[str] | None = None) -> int:
             }
         )
 
+    def title_of(task_id: str) -> str:
+        return next((t["title"] for t in tasks if t["task_id"] == task_id), task_id)
+
     emit_tasks_list()
     emit_map_state()
 
@@ -505,6 +510,13 @@ def main(argv: list[str] | None = None) -> int:
                 payload["meeting_id"] = meetings.meeting_id
                 pending_suggest[uid] = payload
                 emit(payload)
+                append_utterance(
+                    job_id=uid,
+                    text=text_f,
+                    meeting_id=meetings.meeting_id,
+                    kind=str(payload.get("kind") or "speech"),
+                    kind_score=float(payload.get("kind_score") or 0.0),
+                )
                 if payload.get("auto") and payload.get("candidates"):
                     top = payload["candidates"][0]
                     apply_feedback(
@@ -523,6 +535,7 @@ def main(argv: list[str] | None = None) -> int:
                             "score": top["score"],
                         }
                     )
+                    archive_set_task(uid, top["task_id"], title_of(top["task_id"]))
                     emit_tasks_list()
                     emit_map_state()
             return
@@ -562,6 +575,32 @@ def main(argv: list[str] | None = None) -> int:
             path = export_ics(tasks, dest)
             emit({"event": "ics.exported", "path": str(path)})
             return
+        if et == "archive.export":
+            dest_raw = cmd.get("path")
+            dest = Path(dest_raw) if dest_raw else data_root() / "exports" / f"snapshot-{int(time.time())}.json"
+            path = export_json(dest)
+            emit({"event": "archive.exported", "path": str(path)})
+            return
+        if et == "archive.import":
+            src = cmd.get("path")
+            if not src:
+                emit({"event": "archive.import_error", "error": "no path given"})
+                return
+            try:
+                counts = import_json(Path(src))
+            except Exception as exc:  # noqa: BLE001
+                emit({"event": "archive.import_error", "error": str(exc)})
+                return
+            tasks = load_tasks()
+            emit({"event": "archive.imported", **counts})
+            emit_tasks_list()
+            emit_map_state()
+            return
+        if et == "archive.search":
+            query = str(cmd.get("query") or "")
+            results = search_archive(query, load_archive(), tasks)
+            emit({"event": "archive.search_result", "query": query, "results": results})
+            return
 
         meta = pending_suggest.pop(uid, {})
         text_u = str(meta.get("text") or cmd.get("text") or "")
@@ -572,6 +611,7 @@ def main(argv: list[str] | None = None) -> int:
             mode = "auto" if meta.get("auto") else "ask"
             apply_feedback(tasks, chosen_id=tid, utterance=text_u, suggested_ids=suggested_ids, mode=mode)
             emit({"event": "task.assigned", "utterance_id": uid, "task_id": tid})
+            archive_set_task(uid, tid, title_of(tid))
             emit_tasks_list()
             emit_map_state()
         elif et == "task.create":
@@ -580,6 +620,7 @@ def main(argv: list[str] | None = None) -> int:
             tasks = load_tasks()
             apply_feedback(tasks, chosen_id=task["task_id"], utterance=text_u, suggested_ids=suggested_ids, mode="ask")
             emit({"event": "task.created", "utterance_id": uid, "task": {"task_id": task["task_id"], "title": task["title"]}})
+            archive_set_task(uid, task["task_id"], task["title"])
             emit_tasks_list()
             emit_map_state()
         elif et == "task.skip":
@@ -614,6 +655,13 @@ def main(argv: list[str] | None = None) -> int:
                     payload["meeting_id"] = meetings.meeting_id
                     pending_suggest[str(result.job_id)] = payload
                     emit(payload)
+                    append_utterance(
+                        job_id=str(result.job_id),
+                        text=text,
+                        meeting_id=meetings.meeting_id,
+                        kind=str(payload.get("kind") or "speech"),
+                        kind_score=float(payload.get("kind_score") or 0.0),
+                    )
                     # Intent create_task: still suggest UI create with title
                     # Auto-assign only when auto and not create intent
                     if payload.get("auto") and payload.get("candidates"):
@@ -632,6 +680,7 @@ def main(argv: list[str] | None = None) -> int:
                             "auto": True,
                             "score": top["score"],
                         })
+                        archive_set_task(str(result.job_id), top["task_id"], title_of(top["task_id"]))
                         emit_tasks_list()
                         emit_map_state()
     finally:

@@ -30,7 +30,7 @@ python -m worker.main --list-mics
 python -m ui.main
 ```
 
-Данные: `%LOCALAPPDATA%\Stenograf\` (`audio_queue`, `models`, `exports`, `tasks.json`).
+Данные: `%LOCALAPPDATA%\Stenograf\` (`audio_queue`, `models`, `exports`, `tasks.json`, `archive.json`).
 
 ## Статус
 
@@ -42,6 +42,7 @@ python -m ui.main
 - [x] Встречи: `meeting_id`, пауза протокола 8с отдельно от STT-паузы ~1с
 - [x] Карта связей: essence, авто-рёбра, drag-link, hide по клику
 - [x] Протокол: секции по kind, плейсхолдеры шаблона, пакет документов, .ics
-- [x] Поиск по архиву, реальный список задач/сроков в UI (не заглушки)
+- [x] Реальный список задач/сроков в UI (синхронизирован с воркером, не заглушки)
+- [x] Архив реплик (400, JSON экспорт/импорт), поиск по архиву — на воркере, с полным профилем задач
 - [x] `flet build windows` настроен (CI + SETUP_WINDOWS.md) — **не проверен на реальной Windows-машине**
 - [ ] Первый стабильный прогон на целевом Zenbook

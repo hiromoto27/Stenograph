@@ -181,18 +181,8 @@ def main(page: ft.Page) -> None:
         ),
     )
 
-    def do_search(e: ft.ControlEvent) -> None:
-        from dataclasses import asdict
-
-        from worker.search import search_archive
-
-        query = (e.control.value or "").strip()
+    def render_search_results(results: list[dict[str, Any]]) -> None:
         search_results_col.controls.clear()
-        if not query:
-            search_panel.visible = False
-            page.update()
-            return
-        results = search_archive(query, [asdict(l) for l in protocol_entries], tasks_sidebar)
         if not results:
             search_results_col.controls.append(ft.Text("Ничего не найдено", size=12, color=MUTED))
         for r in results:
@@ -207,6 +197,17 @@ def main(page: ft.Page) -> None:
             )
         search_panel.visible = True
         page.update()
+
+    def do_search(e: ft.ControlEvent) -> None:
+        # LOGIC.md §12 — searched server-side over the persisted archive
+        # (worker/archive_store.py), which carries full task profiles the UI's
+        # thin tasks_sidebar mirror doesn't (needed for the +0.15 task bonus).
+        query = (e.control.value or "").strip()
+        if not query:
+            search_panel.visible = False
+            page.update()
+            return
+        client.send({"event": "archive.search", "query": query})
 
     pending_utterance: dict[str, Any] = {}
     # Mirror of worker's tasks_store — populated from "tasks.list" events only;
@@ -602,6 +603,18 @@ def main(page: ft.Page) -> None:
             map_view.set_state(event.get("nodes") or [], event.get("edges") or [])
         elif et == "ics.exported":
             set_status(f"Экспортировано: {event.get('path')}")
+            page.update()
+        elif et == "archive.search_result":
+            render_search_results(event.get("results") or [])
+        elif et == "archive.exported":
+            set_status(f"JSON снимок: {event.get('path')}")
+            page.update()
+        elif et == "archive.imported":
+            set_status(f"Импортировано: задач {event.get('tasks')}, реплик {event.get('archive')}")
+            client.send({"event": "map.request"})
+            page.update()
+        elif et == "archive.import_error":
+            set_status(f"Ошибка импорта: {event.get('error')}")
             page.update()
         elif et == "models.list":
             models = event.get("models") or []
@@ -1094,6 +1107,22 @@ def main(page: ft.Page) -> None:
             vertical_alignment=ft.CrossAxisAlignment.START,
         )
 
+    file_picker = ft.FilePicker()
+
+    def export_json_click(_: ft.ControlEvent) -> None:
+        client.send({"event": "archive.export"})
+        set_status("Экспорт JSON…")
+
+    async def _pick_and_import(_: ft.ControlEvent) -> None:
+        files = await file_picker.pick_files(dialog_title="Импорт JSON", allowed_extensions=["json"])
+        if not files:
+            return
+        client.send({"event": "archive.import", "path": files[0].path})
+        set_status(f"Импорт: {files[0].path}")
+
+    def import_json_click(e: ft.ControlEvent) -> None:
+        page.run_task(_pick_and_import, e)
+
     def settings_view() -> ft.Control:
         return ft.Column(
             [
@@ -1107,6 +1136,20 @@ def main(page: ft.Page) -> None:
                 ),
                 hw_label,
                 backend_label,
+                ft.Row(
+                    [
+                        ft.Text("Данные", size=16, weight=ft.FontWeight.W_600, color=TEXT),
+                        ft.Container(expand=True),
+                        ft.OutlinedButton("Экспорт JSON", on_click=export_json_click),
+                        ft.OutlinedButton("Импорт JSON", on_click=import_json_click),
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                ft.Text(
+                    "Снимок задач + до 400 реплик архива (LOGIC.md §14) — %LOCALAPPDATA%\\Stenograf\\exports",
+                    size=11,
+                    color=MUTED,
+                ),
                 ft.Row(
                     [
                         ft.Text("Каталог моделей", size=16, weight=ft.FontWeight.W_600, color=TEXT),
@@ -1315,6 +1358,7 @@ def main(page: ft.Page) -> None:
     controls = [header, search_panel, body, bottom_nav]
     if browser_host is not None:
         controls.append(ft.Container(content=browser_host, width=1, height=1, opacity=0.01))
+    page.overlay.append(file_picker)
     page.add(ft.Column(controls, expand=True, spacing=0))
     refresh_tasks_sidebar()
     refresh_mics()
