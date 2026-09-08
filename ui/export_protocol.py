@@ -263,3 +263,24 @@ def export_both(lines: list[ProtocolLine], *, title: str = "Протокол в�
     docx_path = export_docx(lines, out / f"protocol-{stamp}.docx", title=title)
     html_path = export_html(lines, out / f"protocol-{stamp}.html", title=title)
     return docx_path, html_path
+
+
+def list_packages(root: Path | None = None) -> list[Path]:
+    """Packages written by export_package(), newest first."""
+    base = (root or default_export_dir()) / "packages"
+    if not base.exists():
+        return []
+    return sorted((p for p in base.iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True)
+
+
+def package_preview(pkg_dir: Path) -> tuple[str, str]:
+    """(title, date) from a package's protocol.md — first two lines of DEFAULT_TEMPLATE."""
+    md = pkg_dir / "protocol.md"
+    title, date = "Протокол", ""
+    if md.exists():
+        lines = md.read_text(encoding="utf-8").splitlines()
+        if lines and lines[0].strip():
+            title = lines[0].strip()
+        if len(lines) > 1 and lines[1].strip():
+            date = lines[1].strip()
+    return title, date

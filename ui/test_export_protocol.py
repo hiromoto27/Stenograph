@@ -15,6 +15,8 @@ from ui.export_protocol import (
     DEFAULT_TEMPLATE,
     ProtocolLine,
     export_package,
+    list_packages,
+    package_preview,
     render_sections,
     render_template,
 )
@@ -76,6 +78,30 @@ class TestExportPackage(unittest.TestCase):
                 export_package(_lines(), title="X", out_root=root)
             packages_dir = root / "packages"
             self.assertLessEqual(len(list(packages_dir.iterdir())), 50)
+
+
+class TestListPackages(unittest.TestCase):
+    def test_empty_when_no_packages_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertEqual(list_packages(Path(tmp)), [])
+
+    def test_lists_newest_first(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            export_package(_lines(), title="Первая", out_root=root)
+            export_package(_lines(), title="Вторая", out_root=root)
+            packages = list_packages(root)
+            self.assertEqual(len(packages), 2)
+            title, _ = package_preview(packages[0])
+            self.assertEqual(title, "Вторая")
+
+    def test_preview_missing_protocol_md_falls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            empty_dir = Path(tmp) / "empty-package"
+            empty_dir.mkdir()
+            title, date = package_preview(empty_dir)
+            self.assertEqual(title, "Протокол")
+            self.assertEqual(date, "")
 
 
 if __name__ == "__main__":

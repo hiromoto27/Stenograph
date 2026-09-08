@@ -14,7 +14,15 @@ from typing import Any
 
 import flet as ft
 
-from ui.export_protocol import ProtocolLine, default_export_dir, export_docx, export_html, export_package
+from ui.export_protocol import (
+    ProtocolLine,
+    default_export_dir,
+    export_docx,
+    export_html,
+    export_package,
+    list_packages,
+    package_preview,
+)
 from ui.map_view import MapView
 from ui.theme import ACCENT, ACCENT_FG, BG, BORDER, MUTED, OK, REC, REC_FG, SURFACE, SURFACE2, SURFACE3, TEXT, page_theme
 from ui.browser_stt import (
@@ -1233,6 +1241,50 @@ def main(page: ft.Page) -> None:
             spacing=12,
         )
 
+    def open_package_folder(path: Path) -> None:
+        page.launch_url(path.resolve().as_uri())
+
+    def protocol_view() -> ft.Control:
+        # LOGIC.md §9 — browse собранные пакеты; сборка кнопкой «Пакет» — в Студии.
+        packages = list_packages()
+        rows: list[ft.Control] = []
+        if not packages:
+            rows.append(ft.Text("Пакетов ещё нет. Соберите «Пакет» в Студии.", size=13, color=MUTED))
+        for pkg in packages[:50]:
+            title, date = package_preview(pkg)
+            rows.append(
+                ft.Container(
+                    content=ft.Row(
+                        [
+                            ft.Column(
+                                [ft.Text(title, size=13, color=TEXT), ft.Text(date, size=11, color=MUTED)],
+                                spacing=2,
+                                expand=True,
+                            ),
+                            ft.OutlinedButton("Открыть папку", on_click=lambda e, p=pkg: open_package_folder(p)),
+                        ]
+                    ),
+                    bgcolor=SURFACE2,
+                    padding=10,
+                    border_radius=8,
+                )
+            )
+        return ft.Column(
+            [
+                ft.Row(
+                    [
+                        ft.Text("Протокол", size=32, weight=ft.FontWeight.W_600, color=TEXT, font_family="Georgia"),
+                        ft.Container(expand=True),
+                        ft.OutlinedButton("Обновить", on_click=lambda e: render_body()),
+                    ]
+                ),
+                ft.Text("Собранные пакеты: протокол + действия + выжимка + черновик гайда.", size=12, color=MUTED),
+                ft.Column(rows, spacing=8, scroll=ft.ScrollMode.AUTO, expand=True),
+            ],
+            expand=True,
+            spacing=12,
+        )
+
     def render_body() -> None:
         if active_tab == "Студия":
             body.content = studio_view()
@@ -1245,7 +1297,7 @@ def main(page: ft.Page) -> None:
         elif active_tab == "Сроки":
             body.content = deadlines_view()
         elif active_tab == "Протокол":
-            body.content = stub_view("Протокол", "Сборка из транскрипта; DOCX/HTML уже в Студии.")
+            body.content = protocol_view()
         elif active_tab == "Гайды":
             body.content = stub_view("Инструкции", "Гайды со скринами — после Студии.")
         page.update()
