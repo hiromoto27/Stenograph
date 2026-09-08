@@ -91,6 +91,7 @@ def main(page: ft.Page) -> None:
     meeting_open = False
     current_meeting_id: str | None = None
     wizard_step = 0
+    compact_mode = False
     protocol_by_id: dict[str, ProtocolLine] = {}
     asr_engine = str(load_ui_settings().get("asr_engine") or "whisper")
     listen_label = ft.Text("", size=12, color=MUTED)
@@ -1369,9 +1370,36 @@ def main(page: ft.Page) -> None:
             horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
         )
 
+    def compact_toggle(_: ft.ControlEvent) -> None:
+        nonlocal compact_mode
+        compact_mode = not compact_mode
+        bottom_nav.visible = not compact_mode and not wizard_active
+        render_body()
+
+    def compact_view() -> ft.Control:
+        # DESIGN.md §5 «Compact»: точка rec (уже в шапке) + «слушаю» + RMS + Протокол + Развернуть.
+        return ft.Container(
+            content=ft.Row(
+                [
+                    ft.Column([listen_label, db_label], spacing=2, expand=True),
+                    ft.OutlinedButton("Протокол", on_click=lambda e: do_export("PACKAGE")),
+                    ft.OutlinedButton("Развернуть", on_click=compact_toggle),
+                ],
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+            ),
+            bgcolor=SURFACE,
+            border=ft.Border.all(1, BORDER),
+            border_radius=16,
+            padding=16,
+        )
+
     def render_body() -> None:
         if wizard_active:
             body.content = wizard_view()
+            page.update()
+            return
+        if compact_mode:
+            body.content = compact_view()
             page.update()
             return
         if active_tab == "Студия":
@@ -1483,6 +1511,13 @@ def main(page: ft.Page) -> None:
                             border_color=BORDER,
                             border_radius=20,
                             on_submit=do_search,
+                        ),
+                        ft.IconButton(
+                            ft.Icons.UNFOLD_LESS,
+                            icon_size=18,
+                            icon_color=MUTED,
+                            tooltip="Compact",
+                            on_click=compact_toggle,
                         ),
                     ],
                     vertical_alignment=ft.CrossAxisAlignment.CENTER,
