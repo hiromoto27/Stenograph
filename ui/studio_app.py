@@ -14,6 +14,7 @@ from typing import Any
 
 import flet as ft
 
+from ui.guides import GUIDES
 from ui.export_protocol import (
     ProtocolLine,
     default_export_dir,
@@ -1294,6 +1295,37 @@ def main(page: ft.Page) -> None:
             spacing=12,
         )
 
+    def guides_view() -> ft.Control:
+        tiles = [
+            ft.ExpansionTile(
+                title=ft.Text(g.title, size=14, weight=ft.FontWeight.W_600, color=TEXT),
+                subtitle=ft.Text(g.subtitle, size=11, color=MUTED),
+                bgcolor=SURFACE2,
+                collapsed_bgcolor=SURFACE2,
+                text_color=TEXT,
+                collapsed_text_color=TEXT,
+                icon_color=MUTED,
+                collapsed_icon_color=MUTED,
+                controls=[
+                    ft.Container(
+                        content=ft.Text(f"{i}. {step}", size=12, color=TEXT),
+                        padding=ft.Padding.only(left=16, right=16, bottom=8),
+                    )
+                    for i, step in enumerate(g.steps, start=1)
+                ],
+            )
+            for g in GUIDES
+        ]
+        return ft.Column(
+            [
+                ft.Text("Гайды", size=32, weight=ft.FontWeight.W_600, color=TEXT, font_family="Georgia"),
+                ft.Text("Как пользоваться Стенографом, по разделам.", size=12, color=MUTED),
+                ft.Column(tiles, spacing=8, scroll=ft.ScrollMode.AUTO, expand=True),
+            ],
+            expand=True,
+            spacing=12,
+        )
+
     def wizard_next(_: ft.ControlEvent) -> None:
         nonlocal wizard_step
         wizard_step = min(wizard_step + 1, 2)
@@ -1415,7 +1447,7 @@ def main(page: ft.Page) -> None:
         elif active_tab == "Протокол":
             body.content = protocol_view()
         elif active_tab == "Гайды":
-            body.content = stub_view("Инструкции", "Гайды со скринами — после Студии.")
+            body.content = guides_view()
         page.update()
 
     def switch_tab(name: str):
