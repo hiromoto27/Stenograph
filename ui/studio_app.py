@@ -25,7 +25,7 @@ from ui.export_protocol import (
     package_preview,
 )
 from ui.map_view import MapView
-from ui.theme import ACCENT, ACCENT_FG, BG, BORDER, MUTED, OK, REC, REC_FG, SURFACE, SURFACE2, SURFACE3, TEXT, page_theme
+from ui.theme import ACCENT, ACCENT_FG, BG, BORDER, MUTED, OK, REC, REC_FG, SURFACE, SURFACE2, SURFACE3, TEXT, WARN, page_theme
 from ui.browser_stt import (
     build_webview,
     resolve_stt_engine,
@@ -762,7 +762,7 @@ def main(page: ft.Page) -> None:
             else:
                 set_status(f"Browser STT: {err}")
 
-    browser_host, browser_start, browser_stop = build_webview(on_browser_message)
+    browser_host, browser_start, browser_stop = build_webview(page, on_browser_message)
 
 
 

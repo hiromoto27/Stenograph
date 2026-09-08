@@ -48,4 +48,5 @@ python -m ui.main
 - [x] Compact-плашка (шапка → значок «свернуть»)
 - [x] Гайды: текстовые инструкции по всем вкладкам (без скриншотов — снимать негде и не с чего)
 - [x] `flet build windows` настроен (CI + SETUP_WINDOWS.md) — **не проверен на реальной Windows-машине**
+- [x] `engine=browser` (Edge WebView2 / Web Speech, тот же движок, что в превью) — API `flet-webview-all` исправлен и покрыт тестами; **сам WebView2/Edge на реальной Windows не проверен**, см. SETUP_WINDOWS.md → «Быстрый запуск: проверка engine=browser»
 - [ ] Первый стабильный прогон на целевом Zenbook

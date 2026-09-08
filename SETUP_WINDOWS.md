@@ -120,8 +120,49 @@ Flutter + Windows SDK, недоступные в песочнице): worker в 
 
 ## STT (Whisper / Browser)
 
-- **Default engine:** `whisper` (local). Optional UI: Ещё → `browser` (Edge Web Speech via WebView2).
-- **Browser needs:** `pip install flet-webview-all` + mic permission in WebView. If WebView missing or mic `not-allowed`, UI falls back to Whisper (no silent failure).
+- **Default engine:** `whisper` (local, полностью офлайн после скачивания модели). Optional UI: Ещё → `browser` (тот же движок, что в превью Grok — Edge/WebView2 + `webkitSpeechRecognition`, `ru-RU`, `interimResults`).
+- **Browser нужен интернет.** Web Speech API в Windows/Edge отправляет звук в облачный сервис распознавания Microsoft — это **не** офлайн-путь, в отличие от Whisper. Если сеть недоступна, распознавание падает с `network` и UI сам переключается на Whisper (см. `_FALLBACK_ERRORS` в `ui/browser_stt.py`).
+- **Browser needs:** `pip install "flet-webview-all>=0.1.8"` + разрешение на микрофон (Windows Settings → Privacy → Microphone, тот же уровень, что уже нужен `sounddevice` для Whisper-пути). Если WebView недоступен или mic `not-allowed` — UI переключается на Whisper, без тихого зависания.
 - **VAD:** on by default with speech pad (~300 ms). Empty transcript → one retry without VAD. Force off: `STENOGRAF_VAD=0`.
 - **RMS:** does **not** drop quiet speech (gate default off). Low mic → `mic.warn` / UI hint only. Optional hard gate: `STENOGRAF_ASR_RMS_MIN=0.005` (not recommended as default).
 - **Worker flag:** `--stt-engine browser` or `STENOGRAF_STT_ENGINE=browser` — capture/VU only, no local Whisper enqueue (UI owns finals via `asr.final`).
+
+### Быстрый запуск: проверка engine=browser
+
+`ui/browser_stt.py` использует управляющий элемент `FletWebviewAll` из
+`flet-webview-all>=0.1.8` (не `WebView` — под этим именем в пакете
+ничего нет) и передаёт текст из JS в Python через именованный канал
+`javascript_channels=["StenografBridge"]`, а не через
+`window.chrome.webview.postMessage` — это API нативного WebView2, а не
+то, что подставляет обёртка `webview_all` у Flutter. Обе детали
+проверены здесь по исходникам пакета и его README (см. коммит), но
+**не проверены на реальном WebView2/Windows** — в песочнице нет
+дисплея.
+
+```bat
+pip install -r requirements-worker.txt -r requirements-ui.txt
+pip install "flet-webview-all>=0.1.8"
+set PYTHONPATH=.
+python -m ui.main
+```
+
+1. Ещё → «Движок STT» → **Browser / Edge Web Speech**.
+   Если статус тут же пишет «Browser недоступен… переключился на
+   Whisper» — пакет не встал или нет WebView2 Runtime (обычно уже
+   стоит на Windows 10 1809+/11; иначе поставить с
+   `https://developer.microsoft.com/microsoft-edge/webview2/`).
+2. Студия → «Записать», разрешить доступ к микрофону, если Windows
+   спросит отдельно.
+3. Скажите что-нибудь по-русски: над лентой должна появиться курсивная
+   промежуточная строка (частичный результат), а после паузы — обычная
+   строка в ленте с пометкой `browser`.
+4. Отключите сеть и повторите — движок должен сам откатиться на
+   Whisper со статусом про `network`, а не зависнуть молча.
+5. Если ничего не приходит и статус не показывает ошибку — включите
+   `debugging_enabled=True` в `FletWebviewAll(...)` (`ui/browser_stt.py`)
+   и вызовите `await wv.open_devtools()`, чтобы увидеть консоль
+   страницы (там будет видно, добралось ли сообщение до
+   `window.StenografBridge`).
+
+Когда проверите на реальной машине — напишите, что сработало и что
+нет, тогда решим, стоит ли делать `browser` движком по умолчанию.

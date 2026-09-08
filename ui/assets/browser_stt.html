@@ -15,15 +15,17 @@ let uid = 'u-0';
 function post(obj) {
   const payload = JSON.stringify(obj);
   try {
-    if (window.chrome && window.chrome.webview && window.chrome.webview.postMessage) {
-      window.chrome.webview.postMessage(payload);
+    // flet-webview-all bridges JS -> Python through a named channel object,
+    // registered on the Python side via javascript_channels=["StenografBridge"]
+    // (ui/browser_stt.py JS_CHANNEL) — not window.chrome.webview.postMessage,
+    // that's the raw native WebView2 API and isn't what this Flutter-hosted
+    // WebView exposes.
+    if (window.StenografBridge && window.StenografBridge.postMessage) {
+      window.StenografBridge.postMessage(payload);
       return;
     }
   } catch (e) {}
-  try {
-    if (window.ft && window.ft.postMessage) { window.ft.postMessage(payload); return; }
-  } catch (e) {}
-  console.log('STT', payload);
+  console.log('STT (no StenografBridge channel)', payload);
 }
 function ensure() {
   if (!SR) { status.textContent = 'SpeechRecognition недоступен'; return null; }
