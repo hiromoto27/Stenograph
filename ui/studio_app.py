@@ -90,6 +90,7 @@ def main(page: ft.Page) -> None:
     queue_done = 0
     meeting_open = False
     current_meeting_id: str | None = None
+    wizard_step = 0
     protocol_by_id: dict[str, ProtocolLine] = {}
     asr_engine = str(load_ui_settings().get("asr_engine") or "whisper")
     listen_label = ft.Text("", size=12, color=MUTED)
@@ -264,6 +265,7 @@ def main(page: ft.Page) -> None:
     selected_model_id: str | None = None
     recommended_model_id: str | None = None
     ui_settings = load_ui_settings()
+    wizard_active = not bool(ui_settings.get("onboarded"))
 
     topic_field = ft.TextField(
         label="Тема встречи",
@@ -1134,7 +1136,13 @@ def main(page: ft.Page) -> None:
     def settings_view() -> ft.Control:
         return ft.Column(
             [
-                ft.Text("Настройки", size=32, weight=ft.FontWeight.W_600, color=TEXT, font_family="Georgia"),
+                ft.Row(
+                    [
+                        ft.Text("Настройки", size=32, weight=ft.FontWeight.W_600, color=TEXT, font_family="Georgia"),
+                        ft.Container(expand=True),
+                        ft.OutlinedButton("Мастер настройки", on_click=wizard_restart),
+                    ]
+                ),
                 ft.Text("Движок: Whisper (worker) или Browser/Edge Web Speech (WebView2).", size=12, color=MUTED),
                 engine_dd,
                 ft.Text(
@@ -1285,7 +1293,87 @@ def main(page: ft.Page) -> None:
             spacing=12,
         )
 
+    def wizard_next(_: ft.ControlEvent) -> None:
+        nonlocal wizard_step
+        wizard_step = min(wizard_step + 1, 2)
+        render_body()
+
+    def wizard_finish(_: ft.ControlEvent | None = None) -> None:
+        nonlocal wizard_active
+        wizard_active = False
+        save_ui_settings(onboarded=True)
+        bottom_nav.visible = True
+        render_body()
+
+    def wizard_restart(_: ft.ControlEvent) -> None:
+        nonlocal wizard_active, wizard_step
+        wizard_active = True
+        wizard_step = 0
+        bottom_nav.visible = False
+        render_body()
+
+    def wizard_view() -> ft.Control:
+        # DESIGN.md §5 «Мастер»: один шаг — одна мысль, кнопка на всю ширину.
+        dots = ft.Row(
+            [
+                ft.Container(width=8, height=8, border_radius=4, bgcolor=ACCENT if i == wizard_step else BORDER)
+                for i in range(3)
+            ],
+            spacing=6,
+            alignment=ft.MainAxisAlignment.CENTER,
+        )
+        if wizard_step == 0:
+            step_content: ft.Control = ft.Column(
+                [
+                    ft.Text("Стенограф", size=32, weight=ft.FontWeight.W_600, color=TEXT, font_family="Georgia"),
+                    ft.Text(
+                        "Локальный диктофон: речь → задачи → протокол. Всё остаётся на этом компьютере.",
+                        size=14,
+                        color=MUTED,
+                    ),
+                ],
+                spacing=12,
+            )
+            primary_label, on_primary = "Далее", wizard_next
+        elif wizard_step == 1:
+            step_content = ft.Column(
+                [
+                    ft.Text("Выберите микрофон", size=28, weight=ft.FontWeight.W_600, color=TEXT, font_family="Georgia"),
+                    mic_dd,
+                    ft.OutlinedButton("Обновить список", on_click=refresh_mics),
+                ],
+                spacing=12,
+            )
+            primary_label, on_primary = "Далее", wizard_next
+        else:
+            step_content = ft.Column(
+                [
+                    ft.Text("Модель распознавания", size=28, weight=ft.FontWeight.W_600, color=TEXT, font_family="Georgia"),
+                    model_dd,
+                    model_rec_label,
+                    download_progress,
+                ],
+                spacing=12,
+            )
+            primary_label, on_primary = "Начать", wizard_finish
+
+        return ft.Column(
+            [
+                dots,
+                ft.Container(content=step_content, expand=True, alignment=ft.Alignment.CENTER),
+                ft.FilledButton(primary_label, bgcolor=ACCENT, color=ACCENT_FG, on_click=on_primary),
+                ft.TextButton("Пропустить", on_click=wizard_finish),
+            ],
+            spacing=20,
+            expand=True,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+        )
+
     def render_body() -> None:
+        if wizard_active:
+            body.content = wizard_view()
+            page.update()
+            return
         if active_tab == "Студия":
             body.content = studio_view()
         elif active_tab == "Ещё":
@@ -1406,6 +1494,7 @@ def main(page: ft.Page) -> None:
     )
 
     rebuild_nav()
+    bottom_nav.visible = not wizard_active
     render_body()
     controls = [header, search_panel, body, bottom_nav]
     if browser_host is not None:
