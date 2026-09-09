@@ -1,0 +1,2 @@
+# Preserve exact release bytes for ZIP downloads and Windows checksum validation.
+* -text

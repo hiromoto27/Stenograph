@@ -1,6 +1,0 @@
-# Stenograph native worker (Windows)
-sounddevice>=0.5.0
-numpy>=1.26
-psutil>=5.9
-# Fallback ASR (CPU/int8 or CUDA). On Arc prefer whisper.cpp + OpenVINO via STENOGRAF_WHISPER_CPP.
-faster-whisper>=1.0.0
