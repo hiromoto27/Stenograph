@@ -1,4 +1,0 @@
-flet>=0.86.0
-python-docx>=1.1.0
-# optional Windows Web Speech host
-# flet-webview-all>=0.1.8
